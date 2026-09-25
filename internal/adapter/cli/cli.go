@@ -40,7 +40,7 @@ type Options struct {
 type Deps struct {
 	Store   usecase.HostStore
 	Secrets SecretStorer
-	Factory usecase.ClientFactory
+	Factory usecase.NewClienter
 }
 
 // SecretStorer is the secret port plus keyring persistence for `add`.

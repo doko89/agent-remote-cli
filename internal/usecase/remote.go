@@ -19,7 +19,7 @@ type ExecOptions struct {
 // applies Lapis-2 filtering. A non-zero remote exit is NOT an error return:
 // it is data inside domain.ExecResult, so callers can separate "tool broke"
 // (error + exit 2) from "remote command failed" (result + exit 1).
-func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory ClientFactory, name string, opt ExecOptions) (domain.Host, domain.ExecResult, error) {
+func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory NewClienter, name string, opt ExecOptions) (domain.Host, domain.ExecResult, error) {
 	if name == "" {
 		return domain.Host{}, domain.ExecResult{}, domain.Fail(domain.CodeInvalidInput, "host name must not be empty")
 	}
@@ -28,7 +28,7 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	}
 	hosts, err := store.Load()
 	if err != nil {
-		return domain.Host{}, domain.ExecResult{}, domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return domain.Host{}, domain.ExecResult{}, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	h, exists := hosts[name]
 	if !exists {
@@ -72,13 +72,13 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 // TestConnection verifies reachability and authentication without running a
 // user command. Connection-level retries live inside the client; this layer
 // only bounds the total time.
-func TestConnection(ctx context.Context, store HostStore, secrets SecretResolver, factory ClientFactory, name string, timeout time.Duration) (domain.Host, domain.TestResult, error) {
+func TestConnection(ctx context.Context, store HostStore, secrets SecretResolver, factory NewClienter, name string, timeout time.Duration) (domain.Host, domain.TestResult, error) {
 	if name == "" {
 		return domain.Host{}, domain.TestResult{}, domain.Fail(domain.CodeInvalidInput, "host name must not be empty")
 	}
 	hosts, err := store.Load()
 	if err != nil {
-		return domain.Host{}, domain.TestResult{}, domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return domain.Host{}, domain.TestResult{}, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	h, exists := hosts[name]
 	if !exists {

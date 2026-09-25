@@ -30,10 +30,33 @@ type AddHostInput struct {
 	FilterDisabled      bool
 }
 
+// loadStoreErr prefixes every store Load failure with one stable message.
+const loadStoreErr = "cannot load host store: "
+
 // ValidateAdd checks the input against the domain contract. Protocol-specific
 // rules live here so `add ssh --help` and `add winrm --help` each only
 // expose flags that can pass for their protocol.
 func ValidateAdd(in AddHostInput) error {
+	if err := validateCommon(in); err != nil {
+		return err
+	}
+	switch in.Protocol {
+	case domain.ProtocolSSH:
+		if err := validateSSH(in); err != nil {
+			return err
+		}
+	case domain.ProtocolWinRM:
+		if err := validateWinRM(in); err != nil {
+			return err
+		}
+	}
+	if _, err := domain.CompilePatterns(in.ExtraFilterPatterns); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCommon(in AddHostInput) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return domain.Fail(domain.CodeInvalidInput, "host name must not be empty")
 	}
@@ -52,33 +75,41 @@ func ValidateAdd(in AddHostInput) error {
 	if !in.Auth.Valid() {
 		return domain.Fail(domain.CodeInvalidInput, "unsupported auth method")
 	}
-	switch in.Protocol {
-	case domain.ProtocolSSH:
-		if in.WinRMTransport != "" {
-			return domain.Fail(domain.CodeInvalidInput, "winrm transport is not valid for ssh hosts")
-		}
-		if in.Auth == domain.AuthEnv && strings.TrimSpace(in.AuthRef) == "" {
-			return domain.Fail(domain.CodeInvalidInput, "env auth requires an environment variable name")
-		}
-		if in.Auth == domain.AuthKeyFile && strings.TrimSpace(in.AuthRef) == "" {
-			return domain.Fail(domain.CodeInvalidInput, "keyfile auth requires a private key path")
-		}
-		if in.PassphraseEnv != "" && in.Auth != domain.AuthKeyFile {
-			return domain.Fail(domain.CodeInvalidInput, "passphrase env is only valid with keyfile auth")
-		}
-	case domain.ProtocolWinRM:
-		if in.Auth == domain.AuthKeyFile {
-			return domain.Fail(domain.CodeInvalidInput, "keyfile auth is not valid for winrm hosts")
-		}
-		if in.Auth == domain.AuthEnv && strings.TrimSpace(in.AuthRef) == "" {
-			return domain.Fail(domain.CodeInvalidInput, "env auth requires an environment variable name")
-		}
-		if t := strings.ToLower(in.WinRMTransport); t != "" && t != "http" && t != "https" {
-			return domain.Fail(domain.CodeInvalidInput, "winrm transport must be http or https")
-		}
+	return nil
+}
+
+func requireAuthRef(in AddHostInput) error {
+	if in.Auth == domain.AuthEnv && strings.TrimSpace(in.AuthRef) == "" {
+		return domain.Fail(domain.CodeInvalidInput, "env auth requires an environment variable name")
 	}
-	if _, err := domain.CompilePatterns(in.ExtraFilterPatterns); err != nil {
+	return nil
+}
+
+func validateSSH(in AddHostInput) error {
+	if in.WinRMTransport != "" {
+		return domain.Fail(domain.CodeInvalidInput, "winrm transport is not valid for ssh hosts")
+	}
+	if err := requireAuthRef(in); err != nil {
 		return err
+	}
+	if in.Auth == domain.AuthKeyFile && strings.TrimSpace(in.AuthRef) == "" {
+		return domain.Fail(domain.CodeInvalidInput, "keyfile auth requires a private key path")
+	}
+	if in.PassphraseEnv != "" && in.Auth != domain.AuthKeyFile {
+		return domain.Fail(domain.CodeInvalidInput, "passphrase env is only valid with keyfile auth")
+	}
+	return nil
+}
+
+func validateWinRM(in AddHostInput) error {
+	if in.Auth == domain.AuthKeyFile {
+		return domain.Fail(domain.CodeInvalidInput, "keyfile auth is not valid for winrm hosts")
+	}
+	if err := requireAuthRef(in); err != nil {
+		return err
+	}
+	if t := strings.ToLower(in.WinRMTransport); t != "" && t != "http" && t != "https" {
+		return domain.Fail(domain.CodeInvalidInput, "winrm transport must be http or https")
 	}
 	return nil
 }
@@ -91,7 +122,7 @@ func AddHost(store HostStore, in AddHostInput) (domain.Host, error) {
 	}
 	hosts, err := store.Load()
 	if err != nil {
-		return domain.Host{}, domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	if _, exists := hosts[in.Name]; exists {
 		return domain.Host{}, domain.Fail(domain.CodeHostExists, "host "+in.Name+" already exists; remove it first or pick another name")
@@ -126,7 +157,7 @@ func AddHost(store HostStore, in AddHostInput) (domain.Host, error) {
 func RemoveHost(store HostStore, secrets SecretResolver, name string) error {
 	hosts, err := store.Load()
 	if err != nil {
-		return domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	if _, exists := hosts[name]; !exists {
 		return domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
@@ -144,7 +175,7 @@ func RemoveHost(store HostStore, secrets SecretResolver, name string) error {
 func ListHosts(store HostStore) ([]domain.Host, error) {
 	hosts, err := store.Load()
 	if err != nil {
-		return nil, domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return nil, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	out := make([]domain.Host, 0, len(hosts))
 	for _, h := range hosts {
@@ -158,7 +189,7 @@ func ListHosts(store HostStore) ([]domain.Host, error) {
 func ShowHost(store HostStore, name string) (domain.Host, error) {
 	hosts, err := store.Load()
 	if err != nil {
-		return domain.Host{}, domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	h, exists := hosts[name]
 	if !exists {

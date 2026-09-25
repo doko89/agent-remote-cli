@@ -104,7 +104,7 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 		return "", err
 	}
 	drain(anon)
-	challenge, err := t.round(payload, "Negotiate "+base64.StdEncoding.EncodeToString(type1))
+	challenge, err := t.round(payload, authScheme+base64.StdEncoding.EncodeToString(type1))
 	if err != nil {
 		return "", err
 	}
@@ -127,12 +127,12 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ntlm seal: %w", err)
 	}
-	final, err := t.roundSealed(sealed, "Negotiate "+base64.StdEncoding.EncodeToString(type3))
+	final, err := t.roundSealed(sealed, authScheme+base64.StdEncoding.EncodeToString(type3))
 	if err != nil {
 		return "", err
 	}
 	defer final.Body.Close()
-	if ct := final.Header.Get("Content-Type"); strings.Contains(ct, `protocol="application/HTTP-SPNEGO-session-encrypted"`) {
+	if ct := final.Header.Get(headerContentType); strings.Contains(ct, `protocol="application/HTTP-SPNEGO-session-encrypted"`) {
 		soapText, err := unsealResponse(nc, final)
 		if err != nil {
 			return "", err
@@ -151,6 +151,12 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 
 // protocolString mirrors the NTLM encrypted-session MIME protocol.
 const protocolString = "application/HTTP-SPNEGO-session-encrypted"
+
+// authScheme carries raw NTLMSSP tokens (not SPNEGO-wrapped).
+const authScheme = "Negotiate "
+
+// headerContentType is the HTTP header set on every WinRM request.
+const headerContentType = "Content-Type"
 
 const mimeBoundary = "--Encrypted Boundary"
 
@@ -177,7 +183,7 @@ func (t *rawNTLM) roundSealed(sealed []byte, auth string) (*http.Response, error
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
-	req.Header.Set("Content-Type", fmt.Sprintf(`multipart/encrypted;protocol="%s";boundary="Encrypted Boundary"`, protocolString))
+	req.Header.Set(headerContentType, fmt.Sprintf(`multipart/encrypted;protocol="%s";boundary="Encrypted Boundary"`, protocolString))
 	req.Header.Set("Authorization", auth)
 	res, err := t.http.Do(req)
 	if err != nil {
@@ -257,7 +263,7 @@ func (t *rawNTLM) round(payload, auth string) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
-	req.Header.Set("Content-Type", "application/soap+xml;charset=UTF-8")
+	req.Header.Set(headerContentType, "application/soap+xml;charset=UTF-8")
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
@@ -284,7 +290,7 @@ func challengeToken(res *http.Response) (string, error) {
 		if rest, ok := strings.CutPrefix(h, "NTLM "); ok && rest != "" {
 			return rest, nil
 		}
-		if rest, ok := strings.CutPrefix(h, "Negotiate "); ok && rest != "" {
+		if rest, ok := strings.CutPrefix(h, authScheme); ok && rest != "" {
 			return rest, nil
 		}
 	}

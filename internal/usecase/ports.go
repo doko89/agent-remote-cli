@@ -37,8 +37,8 @@ type RemoteClient interface {
 	Close() error
 }
 
-// ClientFactory builds a connected client for a host.
-type ClientFactory interface {
+// NewClienter builds a connected client for a host.
+type NewClienter interface {
 	NewClient(h domain.Host, password string) (RemoteClient, error)
 }
 

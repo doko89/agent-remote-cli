@@ -88,42 +88,49 @@ func (s *testServer) serve(nc net.Conn, cfg *ssh.ServerConfig) {
 		if err != nil {
 			continue
 		}
-		go func() {
-			for req := range requests {
-				switch req.Type {
-				case "pty-req":
-					s.sawPty = true
-					req.Reply(false, nil)
-				case "exec":
-					var payload struct{ Value string }
-					ssh.Unmarshal(req.Payload, &payload)
-					req.Reply(true, nil)
-					if payload.Value == "sleep" {
-						time.Sleep(3 * time.Second)
-						fmt.Fprint(channel, "late\n")
-						channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-						channel.Close()
-						continue
-					}
-					switch payload.Value {
-					case "fail":
-						fmt.Fprint(channel, "Last login: today\n")
-						fmt.Fprint(channel, "partial\n")
-						fmt.Fprint(channel.Stderr(), "boom\n")
-						channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{3}))
-					default:
-						fmt.Fprint(channel, "Last login: today\n")
-						fmt.Fprint(channel, "ok\n")
-						channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-					}
-					channel.Close()
-				default:
-					req.Reply(false, nil)
-				}
-			}
-		}()
+		go s.serveSession(channel, requests)
 	}
 	conn.Wait()
+}
+
+// serveSession answers pty/exec requests on one session channel.
+func (s *testServer) serveSession(channel ssh.Channel, requests <-chan *ssh.Request) {
+	for req := range requests {
+		switch req.Type {
+		case "pty-req":
+			s.sawPty = true
+			req.Reply(false, nil)
+		case "exec":
+			s.serveExec(channel, req)
+		default:
+			req.Reply(false, nil)
+		}
+	}
+}
+
+// serveExec runs one canned command and closes the channel.
+func (s *testServer) serveExec(channel ssh.Channel, req *ssh.Request) {
+	var payload struct{ Value string }
+	ssh.Unmarshal(req.Payload, &payload)
+	req.Reply(true, nil)
+	if payload.Value == "sleep" {
+		time.Sleep(3 * time.Second)
+		fmt.Fprint(channel, "late\n")
+		s.exit(channel, 0)
+		return
+	}
+	stdout, stderr, code := "Last login: today\nok\n", "", 0
+	if payload.Value == "fail" {
+		stdout, stderr, code = "Last login: today\npartial\n", "boom\n", 3
+	}
+	fmt.Fprint(channel, stdout)
+	fmt.Fprint(channel.Stderr(), stderr)
+	s.exit(channel, code)
+}
+
+func (s *testServer) exit(channel ssh.Channel, code int) {
+	channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(code)}))
+	channel.Close()
 }
 
 func testHost(port int) domain.Host {

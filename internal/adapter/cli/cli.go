@@ -41,7 +41,7 @@ type Deps struct {
 	Store    usecase.HostStore
 	Secrets  SecretStorer
 	Factory  usecase.NewClienter
-	TFactory usecase.TransferFactory
+	TFactory usecase.NewTransferClienter
 }
 
 // SecretStorer is the secret port plus keyring persistence for `add`.

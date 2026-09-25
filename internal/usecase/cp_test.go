@@ -126,7 +126,7 @@ func TestCopyLocalToRemote(t *testing.T) {
 	factory := memTFactory{remotes: map[string]*memRemote{"r1": r1}}
 	src := t.TempDir() + "/hello.txt"
 	mustWrite(t, src, "hello remote\n")
-	res, err := Copy(context.Background(), store, stubSecrets{}, factory, "", src, "r1", "/up/hello.txt", CopyOptions{})
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "", SrcPath: src, DstHost: "r1", DstPath: "/up/hello.txt", Opt: CopyOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestCopyRemoteToLocal(t *testing.T) {
 	r1.files["/down/data.bin"] = []byte("0123456789")
 	factory := memTFactory{remotes: map[string]*memRemote{"r1": r1}}
 	dst := t.TempDir() + "/sub/data.bin"
-	res, err := Copy(context.Background(), store, stubSecrets{}, factory, "r1", "/down/data.bin", "", dst, CopyOptions{})
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/down/data.bin", DstHost: "", DstPath: dst, Opt: CopyOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestCopyRecursiveBothWays(t *testing.T) {
 	if err := os.MkdirAll(base+"/tree/emptydir", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	res, err := Copy(context.Background(), store, stubSecrets{}, factory, "", base+"/tree", "r1", "/rtree", CopyOptions{Recursive: true})
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "", SrcPath: base + "/tree", DstHost: "r1", DstPath: "/rtree", Opt: CopyOptions{Recursive: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestCopyRecursiveBothWays(t *testing.T) {
 		t.Fatal("empty dir not created")
 	}
 	out := t.TempDir() + "/back"
-	res, err = Copy(context.Background(), store, stubSecrets{}, factory, "r1", "/rtree", "", out, CopyOptions{Recursive: true})
+	res, err = Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/rtree", DstHost: "", DstPath: out, Opt: CopyOptions{Recursive: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestCopyRemoteToRemoteRelay(t *testing.T) {
 	r1 := newMemRemote()
 	r1.files["/x/f.txt"] = []byte("relay-me")
 	factory := memTFactory{remotes: map[string]*memRemote{"r1": r1, "r2": newMemRemote()}}
-	res, err := Copy(context.Background(), store, stubSecrets{}, factory, "r1", "/x/f.txt", "r2", "/y/f.txt", CopyOptions{})
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/x/f.txt", DstHost: "r2", DstPath: "/y/f.txt", Opt: CopyOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,10 +206,10 @@ func TestCopyRemoteToRemoteRelay(t *testing.T) {
 	}
 	// Relay refuses directories without -r, and stages trees with it.
 	r1.dirs["/x"] = true // now /x is a real dir containing f.txt
-	if _, err := Copy(context.Background(), store, stubSecrets{}, factory, "r1", "/x", "r2", "/z", CopyOptions{}); err == nil {
+	if _, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/x", DstHost: "r2", DstPath: "/z", Opt: CopyOptions{}}); err == nil {
 		t.Fatal("relay dir without -r must fail")
 	}
-	res, err = Copy(context.Background(), store, stubSecrets{}, factory, "r1", "/x", "r2", "/z", CopyOptions{Recursive: true})
+	res, err = Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/x", DstHost: "r2", DstPath: "/z", Opt: CopyOptions{Recursive: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestCopyEmptyFile(t *testing.T) {
 	factory := memTFactory{remotes: map[string]*memRemote{"r1": r1}}
 	src := t.TempDir() + "/empty.txt"
 	mustWrite(t, src, "")
-	res, err := Copy(context.Background(), store, stubSecrets{}, factory, "", src, "r1", "/empty.txt", CopyOptions{})
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: "", SrcPath: src, DstHost: "r1", DstPath: "/empty.txt", Opt: CopyOptions{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestCopyRejects(t *testing.T) {
 		{"missing-remote", "r1", "/nope", "", t.TempDir() + "/x", false},
 	}
 	for _, tc := range cases {
-		if _, err := Copy(context.Background(), store, stubSecrets{}, factory, tc.srcH, tc.srcP, tc.dstH, tc.dstP, CopyOptions{Recursive: tc.recursive}); err == nil {
+		if _, err := Copy(context.Background(), store, stubSecrets{}, factory, CopyRequest{SrcHost: tc.srcH, SrcPath: tc.srcP, DstHost: tc.dstH, DstPath: tc.dstP, Opt: CopyOptions{Recursive: tc.recursive}}); err == nil {
 			t.Fatalf("%s: expected error", tc.name)
 		}
 	}

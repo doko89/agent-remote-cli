@@ -43,7 +43,10 @@ func runCp(args []string, opt Options, d Deps) Outcome {
 		return fail(err)
 	}
 	res, err := usecase.Copy(context.Background(), d.Store, overrideSecrets(d, opt, *pwStdin, *pwEnv), d.TFactory,
-		srcHost, srcPath, dstHost, dstPath, usecase.CopyOptions{Recursive: *recursive, Timeout: *timeout})
+		usecase.CopyRequest{
+			SrcHost: srcHost, SrcPath: srcPath, DstHost: dstHost, DstPath: dstPath,
+			Opt: usecase.CopyOptions{Recursive: *recursive, Timeout: *timeout},
+		})
 	if err != nil {
 		return fail(err)
 	}

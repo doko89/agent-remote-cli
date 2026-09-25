@@ -36,8 +36,8 @@ type TransferClient interface {
 	Close() error
 }
 
-// TransferFactory builds a file-transfer client for a host.
-type TransferFactory interface {
+// NewTransferClienter builds a file-transfer client for a host.
+type NewTransferClienter interface {
 	NewTransferClient(h domain.Host, password string) (TransferClient, error)
 }
 

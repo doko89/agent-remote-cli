@@ -16,6 +16,19 @@ type CopyOptions struct {
 	Timeout   time.Duration
 }
 
+// CopyRequest is one `cp` invocation: both endpoints plus options.
+type CopyRequest struct {
+	SrcHost, SrcPath string
+	DstHost, DstPath string
+	Opt              CopyOptions
+}
+
+// dirNeedsFlag rejects directory sources without recursive mode.
+const dirNeedsFlag = "source is a directory; pass -r for recursive copy"
+
+// timedOut reports a copy stopped by its deadline.
+const timedOut = "copy timed out"
+
 // CopyResult counts what one `cp` moved.
 type CopyResult struct {
 	Files      int64
@@ -26,32 +39,32 @@ type CopyResult struct {
 // Copy moves one file or tree between local and remote sides. Either side is
 // local when its host name is empty. Remote-to-remote always routes through
 // a local temp file, so every protocol combination behaves identically.
-func Copy(ctx context.Context, store HostStore, secrets SecretResolver, factory TransferFactory, srcHost, srcPath, dstHost, dstPath string, opt CopyOptions) (CopyResult, error) {
+func Copy(ctx context.Context, store HostStore, secrets SecretResolver, factory NewTransferClienter, req CopyRequest) (CopyResult, error) {
 	var res CopyResult
-	if srcHost == "" && dstHost == "" {
+	if req.SrcHost == "" && req.DstHost == "" {
 		return res, domain.Fail(domain.CodeInvalidInput, "both sides are local; use cp")
 	}
-	if srcPath == "" || dstPath == "" {
+	if req.SrcPath == "" || req.DstPath == "" {
 		return res, domain.Fail(domain.CodeInvalidInput, "source and destination paths must not be empty")
 	}
-	if srcHost == dstHost && srcPath == dstPath {
+	if req.SrcHost == req.DstHost && req.SrcPath == req.DstPath {
 		return res, domain.Fail(domain.CodeInvalidInput, "source and destination are the same")
 	}
 	hosts, err := store.Load()
 	if err != nil {
 		return res, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
-	src, err := resolveSide(hosts, srcHost)
+	src, err := resolveSide(hosts, req.SrcHost)
 	if err != nil {
 		return res, err
 	}
-	dst, err := resolveSide(hosts, dstHost)
+	dst, err := resolveSide(hosts, req.DstHost)
 	if err != nil {
 		return res, err
 	}
 	timeout := copyDefaultTimout
-	if opt.Timeout > 0 {
-		timeout = opt.Timeout
+	if req.Opt.Timeout > 0 {
+		timeout = req.Opt.Timeout
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -62,7 +75,7 @@ func Copy(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 		return res, err
 	}
 	defer c.close()
-	if err := c.copy(callCtx, src, srcPath, dst, dstPath, opt.Recursive, &res); err != nil {
+	if err := c.copy(callCtx, src, req.SrcPath, dst, req.DstPath, req.Opt.Recursive, &res); err != nil {
 		return res, err
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
@@ -85,7 +98,7 @@ type copier struct {
 	clients map[string]TransferClient
 }
 
-func newCopier(ctx context.Context, secrets SecretResolver, factory TransferFactory, src, dst *domain.Host) (*copier, error) {
+func newCopier(ctx context.Context, secrets SecretResolver, factory NewTransferClienter, src, dst *domain.Host) (*copier, error) {
 	c := &copier{clients: map[string]TransferClient{}}
 	for _, h := range []*domain.Host{src, dst} {
 		if h == nil {
@@ -136,7 +149,7 @@ func (c *copier) upload(ctx context.Context, localPath string, dst *domain.Host,
 	}
 	if info.IsDir() {
 		if !recursive {
-			return domain.Fail(domain.CodeInvalidInput, "source is a directory; pass -r for recursive copy")
+			return domain.Fail(domain.CodeInvalidInput, dirNeedsFlag)
 		}
 		return c.uploadDir(ctx, d, localPath, dstPath, res)
 	}
@@ -184,7 +197,7 @@ func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstD
 	}
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
-			return domain.Fail(domain.CodeTimeout, "copy timed out")
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		lp := filepath.Join(localDir, e.Name())
 		dst := dstChild(dstDir, e.Name())
@@ -210,7 +223,7 @@ func (c *copier) download(ctx context.Context, src *domain.Host, srcPath, localP
 	}
 	if info.IsDir {
 		if !recursive {
-			return domain.Fail(domain.CodeInvalidInput, "source is a directory; pass -r for recursive copy")
+			return domain.Fail(domain.CodeInvalidInput, dirNeedsFlag)
 		}
 		return c.downloadDir(ctx, s, srcPath, localPath, res)
 	}
@@ -239,7 +252,7 @@ func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, loca
 	}
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
-			return domain.Fail(domain.CodeTimeout, "copy timed out")
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		lp := filepath.Join(localDir, remoteBase(e.Path))
 		if e.IsDir {
@@ -266,7 +279,7 @@ func (c *copier) relay(ctx context.Context, src *domain.Host, srcPath string, ds
 		return err
 	}
 	if info.IsDir && !recursive {
-		return domain.Fail(domain.CodeInvalidInput, "source is a directory; pass -r for recursive copy")
+		return domain.Fail(domain.CodeInvalidInput, dirNeedsFlag)
 	}
 	var scratch CopyResult
 	if info.IsDir {
@@ -317,7 +330,7 @@ func (c *copier) streamToRemote(ctx context.Context, d TransferClient, f *os.Fil
 	buf := make([]byte, copyBlockSize)
 	for {
 		if err := ctx.Err(); err != nil {
-			return domain.Fail(domain.CodeTimeout, "copy timed out")
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		n, rerr := f.Read(buf)
 		if n > 0 {
@@ -343,7 +356,7 @@ func (c *copier) streamFromRemote(ctx context.Context, s TransferClient, srcPath
 	var offset int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return domain.Fail(domain.CodeTimeout, "copy timed out")
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		chunk, err := s.ReadAt(ctx, srcPath, offset, copyBlockSize)
 		if err != nil {

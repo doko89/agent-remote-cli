@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/bodgit/ntlmssp v0.0.0-20240506230425-31973bb52d9b
 	github.com/masterzen/winrm v0.0.0-20260407182533-5570be7f80cf
+	github.com/pkg/sftp v1.13.11
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.57.0
 )
@@ -25,6 +26,7 @@ require (
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/masterzen/simplexml v0.0.0-20190410153822-31eea3082786 // indirect
 	github.com/tidwall/transform v0.0.0-20201103190739-32f242e2dbde // indirect
 	golang.org/x/net v0.58.0 // indirect

@@ -39,6 +39,17 @@ func (f factory) NewClient(h domain.Host, password string) (usecase.RemoteClient
 	}
 }
 
+func (f factory) NewTransferClient(h domain.Host, password string) (usecase.TransferClient, error) {
+	switch h.Protocol {
+	case domain.ProtocolSSH:
+		return sshclient.SFTPFactory{DialTimeout: f.ssh.DialTimeout}.NewTransferClient(h, password)
+	case domain.ProtocolWinRM:
+		return winrmclient.WinRMFactory{DialTimeout: f.winrm.DialTimeout}.NewTransferClient(h, password)
+	default:
+		return nil, domain.Fail(domain.CodeInvalidInput, "unsupported protocol")
+	}
+}
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -59,9 +70,10 @@ func run(args []string) int {
 		cfgPath = p
 	}
 	d := cli.Deps{
-		Store:   configstore.Store{Path: cfgPath},
-		Secrets: &secret.Resolver{},
-		Factory: factory{},
+		Store:    configstore.Store{Path: cfgPath},
+		Secrets:  &secret.Resolver{},
+		Factory:  factory{},
+		TFactory: factory{},
 	}
 	out, opt := cli.Run(args, opt, d)
 	return emit(opt, out)

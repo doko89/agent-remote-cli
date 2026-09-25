@@ -105,6 +105,25 @@ Penyaringan ini adalah heuristik, bukan jaminan sempurna untuk semua konfigurasi
 - Untuk SSH, autentikasi berbasis private key adalah jalur yang direkomendasikan sebagai metode utama, dengan opsi referensi ke environment variable untuk passphrase key yang terenkripsi.
 - Tidak ada skenario di mana secret tersimpan dalam bentuk plaintext yang bisa dibaca langsung dari file konfigurasi.
 
+### 5.7 Transfer File (`cp`)
+
+Sistem harus bisa menyalin file dan direktori antara mesin lokal dan host
+remote, serta antar dua host remote, dengan antarmuka seragam ala `scp`:
+
+- Setiap sisi ditulis `[host:]path`: prefix `host:` menunjuk host
+  terdaftar, path polos berarti lokal. Colon dengan nama host yang tidak
+  dikenal ditolak eksplisit, tidak ditebak diam-diam.
+- Tiga kombinasi didukung: lokal→remote, remote→lokal, remote→remote
+  (antar host boleh beda protokol). Remote→remote selalu lewat staging
+  lokal sementara agar semua kombinasi berperilaku identik.
+- Direktori hanya disalin dengan flag rekursif eksplisit (`-r`); tanpa itu
+  sumber direktori ditolak dengan pesan yang jelas.
+- SSH memakai subsistem SFTP; WinRM memakai transfer base64 per chunk
+  lewat PowerShell (dengan sealing pesan yang sama seperti `exec`) karena
+  protokolnya tidak punya kanal file.
+- Hasil (`files`, `bytes`, durasi) dikembalikan dalam envelope yang sama;
+  kegagalan transfer adalah kegagalan level tool (exit 2).
+
 ---
 
 ## 6. Cakupan Command
@@ -118,6 +137,7 @@ Penyaringan ini adalah heuristik, bukan jaminan sempurna untuk semua konfigurasi
 | `show <name>` | Menampilkan detail satu host (tanpa secret). |
 | `test <name>` | Memverifikasi konektivitas dan autentikasi tanpa menjalankan command berdampak. |
 | `exec <name> -- <command>` | Menjalankan command pada host, mengembalikan stdout/stderr/exit code/durasi dengan banner tersaring. |
+| `cp [-r] <src> <dest>` | Menyalin file/direktori; tiap sisi `[host:]path` (lihat 5.7). |
 
 Perubahan konfigurasi host yang sudah ada (di luar hapus-lalu-tambah-ulang) dan bentuk final flag per command belum difinalkan — lihat bagian 9.
 
@@ -178,7 +198,6 @@ Poin-poin berikut sudah didiskusikan tapi belum mendapat keputusan final, dan pe
 ## 10. Di Luar Cakupan Versi Ini
 
 - Sesi interaktif penuh (shell interaktif SSH, remote desktop WinRM).
-- Transfer file (SCP/SFTP, copy-item WinRM).
 - Bastion host / multi-hop connection.
 - Manajemen secret tingkat lanjut (rotasi otomatis, integrasi langsung dengan secret manager pihak ketiga di luar environment variable).
 

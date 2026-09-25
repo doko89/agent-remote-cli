@@ -31,13 +31,23 @@ type Factory struct {
 // NewClient connects and authenticates. password is the key passphrase when
 // AuthRef points at a key file, otherwise the password credential.
 func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient, error) {
-	dialTimeout := f.DialTimeout
+	conn, banner, err := dial(h, password, f.DialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return &client{conn: conn, banner: banner}, nil
+}
+
+// dial opens one authenticated SSH connection, shared by the exec client
+// and the SFTP transfer client. The banner is captured outside the command
+// streams (PRD 5.4: pre-auth banners never mix into command output).
+func dial(h domain.Host, password string, dialTimeout time.Duration) (*ssh.Client, string, error) {
 	if dialTimeout <= 0 {
 		dialTimeout = 15 * time.Second
 	}
 	auths, err := authMethods(h, password)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var banner strings.Builder
 	cfg := &ssh.ClientConfig{
@@ -53,9 +63,9 @@ func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient
 	addr := fmt.Sprintf("%s:%d", h.Address, h.DefaultPort())
 	conn, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
-		return nil, classifyDial(err)
+		return nil, "", classifyDial(err)
 	}
-	return &client{conn: conn, banner: banner.String()}, nil
+	return conn, banner.String(), nil
 }
 
 func authMethods(h domain.Host, password string) ([]ssh.AuthMethod, error) {

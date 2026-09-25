@@ -197,6 +197,8 @@ COMMANDS
   test <name> [--timeout 30s]  handshake-only connectivity check
   exec <name> [options] -- <command...>
                                run a remote command (banner-filtered)
+  cp [-r] [options] <src> <dest>
+                               copy files ([host:]path, local when bare)
 
 OUTPUT
   Default is a single-line JSON envelope {"ok","data","error"} for every

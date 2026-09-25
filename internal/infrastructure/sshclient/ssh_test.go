@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"agent-remote/internal/domain"
@@ -93,7 +94,7 @@ func (s *testServer) serve(nc net.Conn, cfg *ssh.ServerConfig) {
 	conn.Wait()
 }
 
-// serveSession answers pty/exec requests on one session channel.
+// serveSession answers pty/exec/subsystem requests on one session channel.
 func (s *testServer) serveSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	for req := range requests {
 		switch req.Type {
@@ -102,6 +103,23 @@ func (s *testServer) serveSession(channel ssh.Channel, requests <-chan *ssh.Requ
 			req.Reply(false, nil)
 		case "exec":
 			s.serveExec(channel, req)
+		case "subsystem":
+			var payload struct{ Value string }
+			ssh.Unmarshal(req.Payload, &payload)
+			if payload.Value != "sftp" {
+				req.Reply(false, nil)
+				continue
+			}
+			req.Reply(true, nil)
+			srv, err := sftp.NewServer(channel)
+			if err != nil {
+				return
+			}
+			// The channel now belongs to the SFTP server; close it when
+			// done so the client side terminates instead of hanging.
+			_ = srv.Serve()
+			channel.Close()
+			return
 		default:
 			req.Reply(false, nil)
 		}

@@ -38,9 +38,10 @@ type Options struct {
 
 // Deps wires the ports. Assembled once in main (composition root).
 type Deps struct {
-	Store   usecase.HostStore
-	Secrets SecretStorer
-	Factory usecase.NewClienter
+	Store    usecase.HostStore
+	Secrets  SecretStorer
+	Factory  usecase.NewClienter
+	TFactory usecase.TransferFactory
 }
 
 // SecretStorer is the secret port plus keyring persistence for `add`.
@@ -91,6 +92,8 @@ func dispatch(cmd string, rest []string, opt Options, d Deps) Outcome {
 		return runTest(rest, opt, d)
 	case "exec":
 		return runExec(rest, opt, d)
+	case "cp":
+		return runCp(rest, opt, d)
 	case "help", "--help", "-h", "":
 		return Outcome{RawOut: usage(opt.Version), Data: map[string]any{"help": usage(opt.Version)}}
 	case "version", "--version":

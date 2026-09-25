@@ -26,6 +26,12 @@ agent-remote rm web1            # juga membersihkan secret keyring
 # Validasi tanpa efek samping, lalu eksekusi (separator `--` wajib)
 agent-remote test web1
 agent-remote exec web1 -- df -h /
+
+# Transfer file ala scp: [host:]path, polos = lokal
+agent-remote cp report.txt w1:C:/temp/
+agent-remote cp w1:C:/temp/report.txt .
+agent-remote cp -r ./dist web1:/opt/app
+agent-remote cp web1:/var/log/app.log w1:C:/t/   # remote-to-remote
 ```
 
 Config tersimpan di `~/.config/agent-remote/hosts.json`
@@ -103,6 +109,8 @@ Protokol baru = tambah 1 package infra + 1 case di factory.
   (wajib saat `AllowUnencrypted=false`) — teruji live lawan Windows asli.
   `TestLiveWinRM` (env `AGENT_REMOTE_WINRM_LIVE=host,user,pass`) membuktikan
   ulang full-stack; unit offline memakai challenge Type2 rekaman.
+- `cp` ke WinRM bertahap per chunk base64 (~6 exec per 256 KB) — benar
+  untuk file konfigurasi/log, lambat untuk file raksasa.
 - Client SSH teruji lawan server SSH dalam-proses: tanpa PTY, banner
   terpisah, exit code, timeout, keyfile.
 - Coverage ≥85% di domain/usecase/cli/presenter/sshclient; configstore,

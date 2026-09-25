@@ -36,6 +36,7 @@ type rawNTLM struct {
 	dialTimeout time.Duration
 	insecure    bool
 	http        *http.Client // fresh per Post, see httpClient
+	transport   *http.Transport
 }
 
 func (t *rawNTLM) Transport(ep *winrm.Endpoint) error {
@@ -52,30 +53,40 @@ func (t *rawNTLM) Transport(ep *winrm.Endpoint) error {
 	return nil
 }
 
-// httpClient builds a FRESH client per SOAP message. NTLM state lives on the
-// TCP connection: reusing an already-authenticated connection for a new
-// handshake confuses picky servers (empty 500s), while legs within one Post
-// still share their connection via keep-alive. Cost is a few extra TCP
-// handshakes per command on a LAN — negligible for a management tool.
+// httpClient builds a fresh client. Each Post cycle must start NTLM on a
+// clean connection; reusing an already-authenticated connection for a new
+// handshake confuses picky servers (empty 500s). Between Posts, rotateClient
+// closes idle connections so hundreds of chunks do not leak file descriptors.
 func (t *rawNTLM) httpClient() *http.Client {
 	dialer := &net.Dialer{Timeout: t.dialTimeout, KeepAlive: 30 * time.Second}
+	t.transport = &http.Transport{
+		DialContext:           dialer.DialContext,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: t.insecure}, //nolint:gosec // opt-in via --insecure
+		ResponseHeaderTimeout: t.dialTimeout,
+	}
 	return &http.Client{
-		Transport: &http.Transport{
-			DialContext:           dialer.DialContext,
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: t.insecure}, //nolint:gosec // opt-in via --insecure
-			ResponseHeaderTimeout: t.dialTimeout,
-		},
+		Transport: t.transport,
 		// Safety cap only; per-command bounds come from the use-case
 		// context enforced by the caller around RunPSWithContext.
 		Timeout: 10 * time.Minute,
 	}
 }
 
+// rotateClient closes idle connections from the previous Post, then creates
+// a fresh http.Client. This prevents fd leaks across hundreds of chunks
+// while ensuring each NTLM handshake starts on a clean TCP connection.
+func (t *rawNTLM) rotateClient() {
+	if t.transport != nil {
+		t.transport.CloseIdleConnections()
+	}
+	t.http = t.httpClient()
+}
+
 // Post runs the payload through a fresh NTLM handshake per SOAP message,
 // mirroring the library's error shape (status code in the message) so error
 // classification keeps working.
 func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
-	t.http = t.httpClient()
+	t.rotateClient()
 	payload := msg.String()
 
 	user, domain := splitUser(t.user)
@@ -108,6 +119,7 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer drain(challenge)
 	token, err := challengeToken(challenge)
 	if err != nil {
 		return "", fmt.Errorf("ntlm challenge: %w", err)

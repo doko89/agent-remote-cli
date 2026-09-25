@@ -188,7 +188,7 @@ func (s *syncer) scan(ctx context.Context, res *SyncResult, opt SyncOptions) err
 		return err
 	}
 	if !srcInfo.isDir {
-		return s.syncOneFile(ctx, s.src, s.src.root, srcInfo, s.dst, s.dst.root, res, opt)
+		return s.syncOneFile(ctx, s.src.root, srcInfo, s.dst.root, res, opt)
 	}
 	if err := mkdirSide(ctx, s.dst, s.dst.root); err != nil {
 		return err
@@ -205,52 +205,68 @@ func (s *syncer) scan(ctx context.Context, res *SyncResult, opt SyncOptions) err
 		if err := ctx.Err(); err != nil {
 			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
-		se := srcTree[rel]
-		dstFull := joinSide(s.dst, rel)
-		if se.isDir {
-			if _, ok := dstTree[rel]; !ok {
-				if err := mkdirSide(ctx, s.dst, dstFull); err != nil {
-					return err
-				}
-				s.emit(opt, SyncEvent{Op: "mkdir", Path: dstFull})
-			}
-			continue
-		}
-		if de, ok := dstTree[rel]; ok && !de.isDir && sameContent(se, de) {
-			continue
-		}
-		if de, ok := dstTree[rel]; ok && de.isDir {
-			if err := removeTree(ctx, s.dst, de.full); err != nil {
-				return err
-			}
-		}
-		before := res.Bytes
-		if err := s.copyFile(ctx, s.src, se.full, s.dst, dstFull, res); err != nil {
+		if err := s.syncEntry(ctx, srcTree[rel], dstTree, res, opt); err != nil {
 			return err
 		}
-		if err := stampSide(ctx, s.dst, dstFull, se.mtime); err != nil {
-			return err
-		}
-		s.emit(opt, SyncEvent{Op: "copy", Path: dstFull, Bytes: res.Bytes - before})
 	}
 	if opt.Delete {
-		for _, rel := range sortedKeysDesc(dstTree) {
-			if _, ok := srcTree[rel]; ok {
-				continue
-			}
-			if err := removeTree(ctx, s.dst, dstTree[rel].full); err != nil {
-				return err
-			}
-			res.Deleted++
-			s.emit(opt, SyncEvent{Op: "delete", Path: dstTree[rel].full})
+		return s.propagateDeletes(ctx, srcTree, dstTree, res, opt)
+	}
+	return nil
+}
+
+// syncEntry mirrors one source entry onto the destination.
+func (s *syncer) syncEntry(ctx context.Context, se treeEntry, dstTree map[string]treeEntry, res *SyncResult, opt SyncOptions) error {
+	dstFull := joinSide(s.dst, se.rel)
+	if se.isDir {
+		if _, ok := dstTree[se.rel]; ok {
+			return nil
 		}
+		if err := mkdirSide(ctx, s.dst, dstFull); err != nil {
+			return err
+		}
+		s.emit(opt, SyncEvent{Op: "mkdir", Path: dstFull})
+		return nil
+	}
+	if de, ok := dstTree[se.rel]; ok && !de.isDir && sameContent(se, de) {
+		return nil
+	}
+	if de, ok := dstTree[se.rel]; ok && de.isDir {
+		if err := removeTree(ctx, s.dst, de.full); err != nil {
+			return err
+		}
+	}
+	before := res.Bytes
+	if err := s.copyFile(ctx, s.src, se.full, s.dst, dstFull, res); err != nil {
+		return err
+	}
+	if err := stampSide(ctx, s.dst, dstFull, se.mtime); err != nil {
+		return err
+	}
+	s.emit(opt, SyncEvent{Op: "copy", Path: dstFull, Bytes: res.Bytes - before})
+	return nil
+}
+
+// propagateDeletes removes destination entries missing from the source,
+// deepest paths first. Everything mode only.
+func (s *syncer) propagateDeletes(ctx context.Context, srcTree, dstTree map[string]treeEntry, res *SyncResult, opt SyncOptions) error {
+	for _, rel := range sortedKeysDesc(dstTree) {
+		if _, ok := srcTree[rel]; ok {
+			continue
+		}
+		if err := removeTree(ctx, s.dst, dstTree[rel].full); err != nil {
+			return err
+		}
+		res.Deleted++
+		s.emit(opt, SyncEvent{Op: "delete", Path: dstTree[rel].full})
 	}
 	return nil
 }
 
 // syncOneFile syncs a single-file source onto a file destination path.
-func (s *syncer) syncOneFile(ctx context.Context, src side, srcFull string, srcInfo treeEntry, dst side, dstFull string, res *SyncResult, opt SyncOptions) error {
-	if de, err := statSide(ctx, dst, dstFull); err == nil {
+// Sides come from the syncer; only the two full paths vary per call.
+func (s *syncer) syncOneFile(ctx context.Context, srcFull string, srcInfo treeEntry, dstFull string, res *SyncResult, opt SyncOptions) error {
+	if de, err := statSide(ctx, s.dst, dstFull); err == nil {
 		if de.isDir {
 			return domain.Fail(domain.CodeInvalidInput, "destination is a directory but source is a file")
 		}
@@ -261,10 +277,10 @@ func (s *syncer) syncOneFile(ctx context.Context, src side, srcFull string, srcI
 		return err
 	}
 	before := res.Bytes
-	if err := s.copyFile(ctx, src, srcFull, dst, dstFull, res); err != nil {
+	if err := s.copyFile(ctx, s.src, srcFull, s.dst, dstFull, res); err != nil {
 		return err
 	}
-	if err := stampSide(ctx, dst, dstFull, srcInfo.mtime); err != nil {
+	if err := stampSide(ctx, s.dst, dstFull, srcInfo.mtime); err != nil {
 		return err
 	}
 	s.emit(opt, SyncEvent{Op: "copy", Path: dstFull, Bytes: res.Bytes - before})
@@ -334,38 +350,59 @@ func mkdirSide(ctx context.Context, sd side, full string) error {
 
 // walkSide lists a directory tree as slash-relative entries.
 func walkSide(ctx context.Context, sd side, root string) (map[string]treeEntry, error) {
-	out := map[string]treeEntry{}
 	if sd.host == nil {
-		err := filepath.WalkDir(root, func(full string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if full == root {
-				return nil
-			}
-			rel, err := filepath.Rel(root, full)
-			if err != nil {
-				return err
-			}
-			var size int64
-			var mt time.Time
-			if !d.IsDir() {
-				if info, err := d.Info(); err == nil {
-					size, mt = info.Size(), info.ModTime().UTC()
-				}
-			}
-			out[filepath.ToSlash(rel)] = treeEntry{rel: filepath.ToSlash(rel), full: full, isDir: d.IsDir(), size: size, mtime: mt}
-			return nil
-		})
-		if err != nil {
-			return nil, domain.Fail(domain.CodeInvalidInput, "cannot list local directory: "+err.Error())
-		}
-		return out, nil
+		return walkLocalSide(root)
 	}
+	return walkRemoteSide(ctx, sd, root)
+}
+
+// walkLocalSide lists a local directory tree.
+func walkLocalSide(root string) (map[string]treeEntry, error) {
+	out := map[string]treeEntry{}
+	err := filepath.WalkDir(root, func(full string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if full == root {
+			return nil
+		}
+		rel, ent, err := localEntry(root, full, d)
+		if err != nil {
+			return err
+		}
+		out[rel] = ent
+		return nil
+	})
+	if err != nil {
+		return nil, domain.Fail(domain.CodeInvalidInput, "cannot list local directory: "+err.Error())
+	}
+	return out, nil
+}
+
+// localEntry maps one walked path to its slash-relative key and entry.
+func localEntry(root, full string, d os.DirEntry) (string, treeEntry, error) {
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return "", treeEntry{}, err
+	}
+	var size int64
+	var mt time.Time
+	if !d.IsDir() {
+		if info, err := d.Info(); err == nil {
+			size, mt = info.Size(), info.ModTime().UTC()
+		}
+	}
+	rel = filepath.ToSlash(rel)
+	return rel, treeEntry{rel: rel, full: full, isDir: d.IsDir(), size: size, mtime: mt}, nil
+}
+
+// walkRemoteSide lists a remote directory tree breadth-first.
+func walkRemoteSide(ctx context.Context, sd side, root string) (map[string]treeEntry, error) {
 	type item struct {
 		full string
 		rel  string
 	}
+	out := map[string]treeEntry{}
 	queue := []item{{root, ""}}
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {

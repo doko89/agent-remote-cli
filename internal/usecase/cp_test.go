@@ -54,6 +54,20 @@ func (m *memRemote) ReadDir(_ context.Context, p string) ([]RemoteFile, error) {
 	}
 	seen := map[string]RemoteFile{}
 	prefix := strings.TrimSuffix(p, "/") + "/"
+	m.collectFiles(prefix, seen)
+	m.collectDirs(p, prefix, seen)
+	out := make([]RemoteFile, 0, len(seen))
+	for _, e := range seen {
+		if !e.IsDir {
+			e.ModTime = m.mtimes[e.Path]
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
+}
+
+func (m *memRemote) collectFiles(prefix string, seen map[string]RemoteFile) {
 	for f, b := range m.files {
 		if !strings.HasPrefix(f, prefix) {
 			continue
@@ -65,23 +79,18 @@ func (m *memRemote) ReadDir(_ context.Context, p string) ([]RemoteFile, error) {
 			seen[f] = RemoteFile{Path: f, Size: int64(len(b))}
 		}
 	}
+}
+
+func (m *memRemote) collectDirs(p, prefix string, seen map[string]RemoteFile) {
 	for d := range m.dirs {
-		if d != p && strings.HasPrefix(d, prefix) {
-			rest := strings.TrimPrefix(d, prefix)
-			if !strings.Contains(strings.TrimSuffix(rest, "/"), "/") {
-				seen[d] = RemoteFile{Path: d, IsDir: true}
-			}
+		if d == p || !strings.HasPrefix(d, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(d, prefix)
+		if !strings.Contains(strings.TrimSuffix(rest, "/"), "/") {
+			seen[d] = RemoteFile{Path: d, IsDir: true}
 		}
 	}
-	out := make([]RemoteFile, 0, len(seen))
-	for _, e := range seen {
-		if !e.IsDir {
-			e.ModTime = m.mtimes[e.Path]
-		}
-		out = append(out, e)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
 }
 
 func (m *memRemote) MkdirAll(_ context.Context, p string) error {

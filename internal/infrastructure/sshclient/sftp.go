@@ -84,7 +84,7 @@ func (c *sftpClient) ReadDir(ctx context.Context, p string) ([]usecase.RemoteFil
 func (c *sftpClient) Remove(ctx context.Context, p string) error {
 	if err := c.sftp.Remove(p); err != nil {
 		// Regular Remove fails on directories; retry as rmdir.
-		if rerr := c.sftp.RemoveDirectory(p); rerr != nil {
+		if c.sftp.RemoveDirectory(p) != nil {
 			return sftpErr("remove", p, err)
 		}
 	}

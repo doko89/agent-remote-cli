@@ -209,11 +209,7 @@ func unsealResponse(nc *bodgitntlm.Client, res *http.Response) (string, error) {
 	if start < 0 {
 		return "", fmt.Errorf("no sealed stream in response")
 	}
-	stream := raw[start+len(marker):]
-	if end := bytes.LastIndex(stream, []byte(mimeBoundary)); end >= 0 {
-		stream = stream[:end]
-	}
-	stream = bytes.TrimRight(stream, "\r\n")
+	stream := cutSealedStream(raw[start+len(marker):])
 	if len(stream) < 4 {
 		return "", fmt.Errorf("truncated sealed stream")
 	}
@@ -229,6 +225,23 @@ func unsealResponse(nc *bodgitntlm.Client, res *http.Response) (string, error) {
 		return "", fmt.Errorf("decrypted length %d != advertised %d", len(decrypted), want)
 	}
 	return string(decrypted), nil
+}
+
+// cutSealedStream ends the sealed blob where MIME framing begins: one line
+// break then the closing boundary. Exactly one break is removed, never a
+// byte run: the sealed blob is RC4 output and may itself end with CR or LF
+// bytes, which TrimRight would eat and corrupt (checksum failure roughly
+// once per 128 messages — the "large download" false negative).
+func cutSealedStream(stream []byte) []byte {
+	for _, sep := range []string{"\r\n" + mimeBoundary, "\n" + mimeBoundary} {
+		if end := bytes.Index(stream, []byte(sep)); end >= 0 {
+			return stream[:end]
+		}
+	}
+	if end := bytes.LastIndex(stream, []byte(mimeBoundary)); end >= 0 {
+		return stream[:end]
+	}
+	return stream
 }
 
 // originalLength reads the Length= advertisement from the MIME headers.

@@ -13,12 +13,21 @@ import (
 )
 
 // WinRM has no file-transfer channel, so files move as base64 text through
-// PowerShell in chunks. Chunk sizes stay far below the WinRM envelope limit
-// (~150 KB) and keep every interpolated value base64 or single-quoted, so
-// file bytes can never break out of the command string.
+// PowerShell in chunks. Every chunk rides one powershell.exe
+// -EncodedCommand command line, which Windows caps at 8191 chars: UTF-16LE
+// doubles the fragment and base64 adds another 4/3 (2.67x total), so the
+// fragment itself must stay near 2400 chars. Every interpolated value is
+// base64 or single-quoted, so file bytes can never break out of the command
+// string.
 const (
-	winReadBlock  = 192 * 1024 // raw bytes per download exec
-	winWriteChars = 60000      // base64 chars per upload exec
+	winReadBlock = 192 * 1024 // raw bytes per download exec
+	// maxPSFragment caps one upload fragment (template + payload) so the
+	// encoded command line stays under the 8191-char Windows limit with
+	// margin for long destination paths.
+	maxPSFragment = 2400
+	// minWritePiece floors the payload when the destination path is so long
+	// the budget collapses; uploads still proceed, fewer bytes per exec.
+	minWritePiece = 512
 )
 
 // WinRMFactory builds file-transfer clients. It reuses the raw-NTLM sealed
@@ -242,9 +251,17 @@ func (t *transfer) AppendChunk(ctx context.Context, p string, data []byte, first
 	if first {
 		verb = "Set-Content"
 	}
-	for _, piece := range splitB64(b64, winWriteChars) {
+	// Size the payload from the measured template so fragment + payload
+	// stays within maxPSFragment. Both verbs share a length, so one
+	// measurement covers every piece.
+	overhead := len(fmt.Sprintf(`%s -LiteralPath %s -Value %s -NoNewline`, verb, psQuote(stage), `''`))
+	piece := maxPSFragment - overhead
+	if piece < minWritePiece {
+		piece = minWritePiece
+	}
+	for _, part := range splitB64(b64, piece) {
 		if _, err := t.ps(ctx, fmt.Sprintf(
-			`%s -LiteralPath %s -Value %s -NoNewline`, verb, psQuote(stage), psQuote(piece))); err != nil {
+			`%s -LiteralPath %s -Value %s -NoNewline`, verb, psQuote(stage), psQuote(part))); err != nil {
 			return err
 		}
 		verb = "Add-Content" // only the first piece truncates

@@ -118,9 +118,14 @@ remote, serta antar dua host remote, dengan antarmuka seragam ala `scp`:
   lokal sementara agar semua kombinasi berperilaku identik.
 - Direktori hanya disalin dengan flag rekursif eksplisit (`-r`); tanpa itu
   sumber direktori ditolak dengan pesan yang jelas.
+- Semantik `scp` untuk file tunggal: bila dest adalah direktori yang sudah
+  ada, file masuk ke dalamnya memakai basename sumber — di semua kombinasi
+  sisi (upload, download, relay).
 - SSH memakai subsistem SFTP; WinRM memakai transfer base64 per chunk
   lewat PowerShell (dengan sealing pesan yang sama seperti `exec`) karena
-  protokolnya tidak punya kanal file.
+  protokolnya tidak punya kanal file. Tiap chunk harus muat dalam satu
+  command line Windows (batas 8191 char via `-EncodedCommand`), jadi
+  potongan upload dibatasi ~2 KB base64 per exec.
 - Hasil (`files`, `bytes`, durasi) dikembalikan dalam envelope yang sama;
   kegagalan transfer adalah kegagalan level tool (exit 2).
 

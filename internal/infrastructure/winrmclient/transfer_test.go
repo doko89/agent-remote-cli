@@ -140,6 +140,42 @@ func TestTransferAppendChunkVerbs(t *testing.T) {
 	}
 }
 
+// TestTransferAppendChunkFitsCmdLine pins the upload sizing: every fragment
+// must fit a powershell.exe -EncodedCommand command line (Windows caps at
+// 8191 chars; UTF-16LE doubles, base64 adds 4/3). The old 60000-char pieces
+// failed past ~2.2KB with "command line too long" (proven live).
+func TestTransferAppendChunkFitsCmdLine(t *testing.T) {
+	in := &scriptInner{}
+	tr := &transfer{inner: in}
+	data := make([]byte, 8192)
+	for i := range data {
+		data[i] = byte(i * 31)
+	}
+	if err := tr.AppendChunk(context.Background(), `C:\temp\some\long\dir\file.bin`, data, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(in.scripts) < 2 {
+		t.Fatalf("8KB must split into several execs, got %d", len(in.scripts))
+	}
+	var b64 strings.Builder
+	for _, frag := range in.scripts {
+		// Real wire cost of this fragment on a Windows command line.
+		wire := len("powershell.exe -EncodedCommand ") + (2*len(frag)+2)/3*4
+		if wire > 8191 {
+			t.Fatalf("fragment costs %d command-line chars, over 8191: %.60q...", wire, frag)
+		}
+		start := strings.Index(frag, "-Value '")
+		end := strings.Index(frag, "' -NoNewline")
+		if start < 0 || end < 0 || end <= start {
+			t.Fatalf("payload not single-quoted: %.80q...", frag)
+		}
+		b64.WriteString(frag[start+len("-Value '") : end])
+	}
+	if b64.String() != base64.StdEncoding.EncodeToString(data) {
+		t.Fatal("split payloads do not reassemble to the input")
+	}
+}
+
 func TestTransferReadAtDecodes(t *testing.T) {
 	want := []byte("chunk-data")
 	in := &scriptInner{replies: map[string]scriptReply{

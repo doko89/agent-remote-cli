@@ -263,6 +263,61 @@ func TestCopyEmptyFile(t *testing.T) {
 	}
 }
 
+// TestCopyFileToExistingDir pins scp semantics: a single-file copy whose
+// destination is an existing directory lands inside it under the source
+// basename — on every side combination. Proven live: without this, SSH
+// failed, WinRM reported ok while losing the file, and local failed.
+func TestCopyFileToExistingDir(t *testing.T) {
+	ctx := context.Background()
+	t.Run("upload", func(t *testing.T) {
+		store := cpStore()
+		r1 := newMemRemote()
+		r1.dirs["/up"] = true
+		factory := memTFactory{remotes: map[string]*memRemote{"r1": r1}}
+		src := t.TempDir() + "/note.txt"
+		mustWrite(t, src, "inside")
+		res, err := Copy(ctx, store, stubSecrets{}, factory, CopyRequest{SrcHost: "", SrcPath: src, DstHost: "r1", DstPath: "/up"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Files != 1 {
+			t.Fatalf("counts wrong: %+v", res)
+		}
+		if string(r1.files["/up/note.txt"]) != "inside" {
+			t.Fatalf("not placed inside dir: %v", r1.files)
+		}
+	})
+	t.Run("download", func(t *testing.T) {
+		store := cpStore()
+		r1 := newMemRemote()
+		r1.files["/down/data.bin"] = []byte("0123456789")
+		factory := memTFactory{remotes: map[string]*memRemote{"r1": r1}}
+		dir := t.TempDir()
+		res, err := Copy(ctx, store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/down/data.bin", DstHost: "", DstPath: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Files != 1 || mustRead(t, dir+"/data.bin") != "0123456789" {
+			t.Fatalf("not placed inside dir: %+v", res)
+		}
+	})
+	t.Run("relay", func(t *testing.T) {
+		store := cpStore()
+		r1 := newMemRemote()
+		r2 := newMemRemote()
+		r1.files["/x/f.txt"] = []byte("relay-me")
+		r2.dirs["/y"] = true
+		factory := memTFactory{remotes: map[string]*memRemote{"r1": r1, "r2": r2}}
+		res, err := Copy(ctx, store, stubSecrets{}, factory, CopyRequest{SrcHost: "r1", SrcPath: "/x/f.txt", DstHost: "r2", DstPath: "/y"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Files != 1 || string(r2.files["/y/f.txt"]) != "relay-me" {
+			t.Fatalf("not placed inside dir: %+v", res)
+		}
+	})
+}
+
 func TestCopyRejects(t *testing.T) {
 	store := cpStore()
 	factory := memTFactory{remotes: map[string]*memRemote{"r1": newMemRemote()}}

@@ -114,17 +114,52 @@ func TestSealEnvelopeShape(t *testing.T) {
 		t.Fatalf("advertised length = %d", n)
 	}
 	marker := []byte("\tContent-Type: application/octet-stream\r\n")
-	stream := env[bytes.Index(env, marker)+len(marker):]
-	if end := bytes.LastIndex(stream, []byte(mimeBoundary)); end >= 0 {
-		stream = stream[:end]
-	}
-	stream = bytes.TrimRight(stream, "\r\n")
+	stream := cutSealedStream(env[bytes.Index(env, marker)+len(marker):])
 	if len(stream) < 4 {
 		t.Fatal("stream too short for signature length")
 	}
 	sigLen := int(uint32(stream[0]) | uint32(stream[1])<<8 | uint32(stream[2])<<16 | uint32(stream[3])<<24)
 	if sigLen <= 0 || len(stream) < 4+sigLen {
 		t.Fatalf("bad signature bounds sigLen=%d streamLen=%d", sigLen, len(stream))
+	}
+}
+
+// TestCutSealedStream pins the framing cut: exactly one line break goes,
+// never a byte run. A sealed blob is RC4 output and may end with CR or LF
+// bytes — the old TrimRight ate them and broke the checksum about once per
+// 128 messages (large-download false negative, proven live).
+func TestCutSealedStream(t *testing.T) {
+	head := append([]byte("\x10\x00\x00\x00"), bytes.Repeat([]byte{0xAA}, 16)...)
+	mk := func(blob, framing []byte) []byte {
+		out := append(append([]byte{}, head...), blob...)
+		return append(append(out, framing...), []byte(mimeBoundary+"--\r\n")...)
+	}
+	want := func(blob []byte) []byte {
+		return append(append([]byte{}, head...), blob...)
+	}
+	// A blob ending in CR with bare-LF framing is indistinguishable from
+	// CRLF framing, so it is only paired with the CRLF framing real
+	// servers send; every other combination must cut exactly.
+	cases := []struct {
+		blob     []byte
+		framings [][]byte
+	}{
+		{[]byte{0x01, 0x02, 0x0D}, [][]byte{[]byte("\r\n")}},
+		{[]byte{0x01, 0x02, 0x0A}, [][]byte{[]byte("\r\n"), []byte("\n")}},
+		{[]byte{0x0D, 0x0A}, [][]byte{[]byte("\r\n")}},
+		{[]byte{0x01, 0x02}, [][]byte{[]byte("\r\n"), []byte("\n")}},
+	}
+	for _, tc := range cases {
+		for _, framing := range tc.framings {
+			if got := cutSealedStream(mk(tc.blob, framing)); !bytes.Equal(got, want(tc.blob)) {
+				t.Fatalf("blob %x framing %q: got %x", tc.blob, framing, got)
+			}
+		}
+	}
+	// No framing at all: blob abuts the boundary, fallback keeps it whole.
+	bare := append(want([]byte{0x01}), []byte(mimeBoundary+"--")...)
+	if got := cutSealedStream(bare); !bytes.Equal(got, want([]byte{0x01})) {
+		t.Fatalf("bare boundary: got %x", got)
 	}
 }
 

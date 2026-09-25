@@ -156,7 +156,7 @@ func (c *copier) upload(ctx context.Context, localPath string, dst *domain.Host,
 		}
 		return c.uploadDir(ctx, d, localPath, dstPath, res)
 	}
-	return c.uploadFile(ctx, d, localPath, dstPath, res)
+	return c.uploadFile(ctx, d, localPath, remoteFileDest(ctx, d, dstPath, filepath.Base(localPath)), res)
 }
 
 func (c *copier) uploadFile(ctx context.Context, d TransferClient, localPath, dstPath string, res fileCounter) error {
@@ -230,7 +230,7 @@ func (c *copier) download(ctx context.Context, src *domain.Host, srcPath, localP
 		}
 		return c.downloadDir(ctx, s, srcPath, localPath, res)
 	}
-	return c.downloadFile(ctx, s, srcPath, localPath, res)
+	return c.downloadFile(ctx, s, srcPath, localFileDest(localPath, remoteBase(srcPath)), res)
 }
 
 func (c *copier) downloadFile(ctx context.Context, s TransferClient, srcPath, localPath string, res fileCounter) error {
@@ -308,7 +308,7 @@ func (c *copier) relay(ctx context.Context, src *domain.Host, srcPath string, ds
 	}
 	tmp.Close()
 	defer os.Remove(tmpName)
-	return c.uploadStagedFile(ctx, d, tmpName, dstPath, res)
+	return c.uploadStagedFile(ctx, d, tmpName, remoteFileDest(ctx, d, dstPath, remoteBase(srcPath)), res)
 }
 
 // uploadStagedFile uploads a temp file staged by relay and counts it.
@@ -385,6 +385,27 @@ func (c *copier) streamFromRemote(ctx context.Context, s TransferClient, srcPath
 // accept "/" (PowerShell too), so one form suffices for every client.
 func dstChild(dir, name string) string {
 	return dir + "/" + name
+}
+
+// remoteFileDest resolves a single-file destination with scp semantics:
+// when dstPath names an existing remote directory, the file lands inside it
+// under base. A missing path passes through untouched, and any other stat
+// failure does too — later steps (mkdir, write) surface real errors, while
+// missing simply means "create here".
+func remoteFileDest(ctx context.Context, d TransferClient, dstPath, base string) string {
+	if info, err := d.Stat(ctx, dstPath); err == nil && info.IsDir {
+		return dstChild(dstPath, base)
+	}
+	return dstPath
+}
+
+// localFileDest is the local mirror: an existing local directory gains the
+// basename, anything else passes through untouched.
+func localFileDest(localPath, base string) string {
+	if fi, err := os.Stat(localPath); err == nil && fi.IsDir() {
+		return filepath.Join(localPath, base)
+	}
+	return localPath
 }
 
 // remoteBase is the last segment of a remote path on either separator.

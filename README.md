@@ -114,8 +114,11 @@ Protokol baru = tambah 1 package infra + 1 case di factory.
   (wajib saat `AllowUnencrypted=false`) — teruji live lawan Windows asli.
   `TestLiveWinRM` (env `AGENT_REMOTE_WINRM_LIVE=host,user,pass`) membuktikan
   ulang full-stack; unit offline memakai challenge Type2 rekaman.
-- `cp` ke WinRM bertahap per chunk base64 (~6 exec per 256 KB) — benar
-  untuk file konfigurasi/log, lambat untuk file raksasa.
+- `cp` file tunggal ke dest direktori yang sudah ada masuk ke dalamnya
+  (basename sumber), ala `scp` — semua kombinasi sisi.
+- `cp` ke WinRM bertahap per chunk base64 (~2 KB per exec, batas command
+  line Windows 8191 char) — benar untuk file konfigurasi/log, lambat
+  untuk file raksasa.
 - Client SSH teruji lawan server SSH dalam-proses: tanpa PTY, banner
   terpisah, exit code, timeout, keyfile.
 - Coverage ≥85% di domain/usecase/cli/presenter/sshclient; configstore,

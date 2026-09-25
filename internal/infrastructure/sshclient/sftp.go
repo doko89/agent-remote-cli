@@ -65,7 +65,7 @@ func (c *sftpClient) Stat(ctx context.Context, p string) (usecase.RemoteFile, er
 	if err != nil {
 		return usecase.RemoteFile{}, sftpErr("stat", p, err)
 	}
-	return usecase.RemoteFile{Path: p, IsDir: fi.IsDir(), Size: fi.Size()}, nil
+	return usecase.RemoteFile{Path: p, IsDir: fi.IsDir(), Size: fi.Size(), ModTime: fi.ModTime().UTC()}, nil
 }
 
 func (c *sftpClient) ReadDir(ctx context.Context, p string) ([]usecase.RemoteFile, error) {
@@ -75,9 +75,28 @@ func (c *sftpClient) ReadDir(ctx context.Context, p string) ([]usecase.RemoteFil
 	}
 	out := make([]usecase.RemoteFile, 0, len(fis))
 	for _, fi := range fis {
-		out = append(out, usecase.RemoteFile{Path: path.Join(p, fi.Name()), IsDir: fi.IsDir(), Size: fi.Size()})
+		out = append(out, usecase.RemoteFile{Path: path.Join(p, fi.Name()), IsDir: fi.IsDir(), Size: fi.Size(), ModTime: fi.ModTime().UTC()})
 	}
 	return out, nil
+}
+
+// Remove deletes one file or empty directory.
+func (c *sftpClient) Remove(ctx context.Context, p string) error {
+	if err := c.sftp.Remove(p); err != nil {
+		// Regular Remove fails on directories; retry as rmdir.
+		if rerr := c.sftp.RemoveDirectory(p); rerr != nil {
+			return sftpErr("remove", p, err)
+		}
+	}
+	return nil
+}
+
+// SetMTime stamps a written file so later sync scans compare correctly.
+func (c *sftpClient) SetMTime(ctx context.Context, p string, mt time.Time) error {
+	if err := c.sftp.Chtimes(p, mt, mt); err != nil {
+		return sftpErr("chtimes", p, err)
+	}
+	return nil
 }
 
 func (c *sftpClient) MkdirAll(ctx context.Context, p string) error {

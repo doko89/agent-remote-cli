@@ -6,14 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"agent-remote/internal/domain"
 	"agent-remote/internal/usecase"
 )
 
 type fakeTClient struct {
-	files map[string][]byte
-	dirs  map[string]bool
+	files  map[string][]byte
+	mtimes map[string]time.Time
+	dirs   map[string]bool
 }
 
 func (f *fakeTClient) Stat(_ context.Context, p string) (usecase.RemoteFile, error) {
@@ -21,16 +23,31 @@ func (f *fakeTClient) Stat(_ context.Context, p string) (usecase.RemoteFile, err
 		return usecase.RemoteFile{Path: p, IsDir: true}, nil
 	}
 	if b, ok := f.files[p]; ok {
-		return usecase.RemoteFile{Path: p, Size: int64(len(b))}, nil
+		return usecase.RemoteFile{Path: p, Size: int64(len(b)), ModTime: f.mtimes[p]}, nil
 	}
 	return usecase.RemoteFile{}, domain.Fail(domain.CodeInvalidInput, "no such file")
+}
+
+func (f *fakeTClient) Remove(_ context.Context, p string) error {
+	delete(f.files, p)
+	delete(f.mtimes, p)
+	delete(f.dirs, p)
+	return nil
+}
+
+func (f *fakeTClient) SetMTime(_ context.Context, p string, mt time.Time) error {
+	if f.mtimes == nil {
+		f.mtimes = map[string]time.Time{}
+	}
+	f.mtimes[p] = mt
+	return nil
 }
 
 func (f *fakeTClient) ReadDir(_ context.Context, p string) ([]usecase.RemoteFile, error) {
 	var out []usecase.RemoteFile
 	for fp, b := range f.files {
 		if filepath.Dir(fp) == p {
-			out = append(out, usecase.RemoteFile{Path: fp, Size: int64(len(b))})
+			out = append(out, usecase.RemoteFile{Path: fp, Size: int64(len(b)), ModTime: f.mtimes[fp]})
 		}
 	}
 	return out, nil

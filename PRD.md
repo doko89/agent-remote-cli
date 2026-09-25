@@ -124,6 +124,22 @@ remote, serta antar dua host remote, dengan antarmuka seragam ala `scp`:
 - Hasil (`files`, `bytes`, durasi) dikembalikan dalam envelope yang sama;
   kegagalan transfer adalah kegagalan level tool (exit 2).
 
+### 5.8 Sinkronisasi (`sync`)
+
+`sync` adalah `cp` yang hemat: hanya file baru/berubah yang disalin,
+perbandingan memakai ukuran + mtime (toleransi 2 detik untuk skew jam).
+Setelah menulis, mtime sumber dicap ke tujuan agar pemindaian berikut
+diam.
+
+- Selalu satu arah (src→dest). Mode default half side: tidak pernah
+  menghapus. Mode everything (`--delete`) menghapus file/dir tujuan yang
+  tidak ada di sumber; `--half` menegaskan default eksplisit.
+- `-w/--watch` memindai ulang tiap interval sampai dibatalkan (Ctrl-C),
+  menyalin create/update (dan delete bila everything), men-stream satu
+  objek JSON per aksi lalu ringkasan akhir.
+- Satu file bisa di-sync langsung (tujuan adalah path file); direktori
+  selalu penuh (tidak ada pola include/exclude di versi ini).
+
 ---
 
 ## 6. Cakupan Command
@@ -138,6 +154,7 @@ remote, serta antar dua host remote, dengan antarmuka seragam ala `scp`:
 | `test <name>` | Memverifikasi konektivitas dan autentikasi tanpa menjalankan command berdampak. |
 | `exec <name> -- <command>` | Menjalankan command pada host, mengembalikan stdout/stderr/exit code/durasi dengan banner tersaring. |
 | `cp [-r] <src> <dest>` | Menyalin file/direktori; tiap sisi `[host:]path` (lihat 5.7). |
+| `sync [--delete\|--half] [-w] <src> <dest>` | Mirror satu arah src→dest; lewati yang segar, `--delete` hapus sisanya, `-w` pantau terus (lihat 5.8). |
 
 Perubahan konfigurasi host yang sudah ada (di luar hapus-lalu-tambah-ulang) dan bentuk final flag per command belum difinalkan — lihat bagian 9.
 

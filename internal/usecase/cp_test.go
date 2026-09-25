@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"agent-remote/internal/domain"
 )
@@ -16,12 +17,13 @@ import (
 // set, separators are "/". It proves Copy orchestration (streaming, counts,
 // recursion, relay) without any network.
 type memRemote struct {
-	files map[string][]byte
-	dirs  map[string]bool
+	files  map[string][]byte
+	mtimes map[string]time.Time
+	dirs   map[string]bool
 }
 
 func newMemRemote() *memRemote {
-	return &memRemote{files: map[string][]byte{}, dirs: map[string]bool{"/": true}}
+	return &memRemote{files: map[string][]byte{}, mtimes: map[string]time.Time{}, dirs: map[string]bool{"/": true}}
 }
 
 func (m *memRemote) Stat(_ context.Context, p string) (RemoteFile, error) {
@@ -29,9 +31,21 @@ func (m *memRemote) Stat(_ context.Context, p string) (RemoteFile, error) {
 		return RemoteFile{Path: p, IsDir: true}, nil
 	}
 	if b, ok := m.files[p]; ok {
-		return RemoteFile{Path: p, Size: int64(len(b))}, nil
+		return RemoteFile{Path: p, Size: int64(len(b)), ModTime: m.mtimes[p]}, nil
 	}
 	return RemoteFile{}, domain.Fail(domain.CodeInvalidInput, "no such file")
+}
+
+func (m *memRemote) Remove(_ context.Context, p string) error {
+	delete(m.files, p)
+	delete(m.mtimes, p)
+	delete(m.dirs, p)
+	return nil
+}
+
+func (m *memRemote) SetMTime(_ context.Context, p string, mt time.Time) error {
+	m.mtimes[p] = mt
+	return nil
 }
 
 func (m *memRemote) ReadDir(_ context.Context, p string) ([]RemoteFile, error) {
@@ -61,6 +75,9 @@ func (m *memRemote) ReadDir(_ context.Context, p string) ([]RemoteFile, error) {
 	}
 	out := make([]RemoteFile, 0, len(seen))
 	for _, e := range seen {
+		if !e.IsDir {
+			e.ModTime = m.mtimes[e.Path]
+		}
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })

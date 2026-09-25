@@ -92,31 +92,53 @@ func (t *transfer) Stat(ctx context.Context, p string) (usecase.RemoteFile, erro
 	out, err := t.ps(ctx, fmt.Sprintf(
 		`if (Test-Path -LiteralPath %s -PathType Container) { '{"is_dir":true}' } `+
 			`elseif (Test-Path -LiteralPath %s -PathType Leaf) { `+
-			`$l=(Get-Item -LiteralPath %s).Length; '{"is_dir":false,"size":' + $l + '}' } `+
+			`$i=(Get-Item -LiteralPath %s); `+
+			`'{"is_dir":false,"size":' + $i.Length + ',"mtime":"' + $i.LastWriteTimeUtc.ToString('o') + '"}' } `+
 			`else { exit 1 }`, psQuote(p), psQuote(p), psQuote(p)))
 	if err != nil {
 		return usecase.RemoteFile{}, err
 	}
+	v, err := parseStatJSON(out)
+	if err != nil {
+		return usecase.RemoteFile{}, err
+	}
+	v.Path = p
+	return v, nil
+}
+
+// parseStatJSON decodes the Stat fragment output; mtime arrives as ISO-8601.
+func parseStatJSON(out string) (usecase.RemoteFile, error) {
 	var v struct {
-		IsDir bool  `json:"is_dir"`
-		Size  int64 `json:"size"`
+		IsDir bool   `json:"is_dir"`
+		Size  int64  `json:"size"`
+		MTime string `json:"mtime"`
 	}
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		return usecase.RemoteFile{}, domain.Fail(domain.CodeInternal, "cannot parse stat output: "+err.Error())
 	}
-	return usecase.RemoteFile{Path: p, IsDir: v.IsDir, Size: v.Size}, nil
+	var mt time.Time
+	if v.MTime != "" {
+		var err error
+		mt, err = time.Parse(time.RFC3339, v.MTime)
+		if err != nil {
+			return usecase.RemoteFile{}, domain.Fail(domain.CodeInternal, "cannot parse mtime: "+err.Error())
+		}
+	}
+	return usecase.RemoteFile{IsDir: v.IsDir, Size: v.Size, ModTime: mt.UTC()}, nil
 }
 
 type winDirEntry struct {
 	Name        string `json:"name"`
 	IsContainer bool   `json:"is_container"`
 	Length      *int64 `json:"length"`
+	MTime       string `json:"mtime"`
 }
 
 func (t *transfer) ReadDir(ctx context.Context, p string) ([]usecase.RemoteFile, error) {
 	out, err := t.ps(ctx, fmt.Sprintf(
 		`Get-ChildItem -LiteralPath %s -Force | `+
-			`Select-Object @{n='name';e={$_.Name}},@{n='is_container';e={$_.PSIsContainer}},@{n='length';e={$_.Length}} | `+
+			`Select-Object @{n='name';e={$_.Name}},@{n='is_container';e={$_.PSIsContainer}},`+
+			`@{n='length';e={$_.Length}},@{n='mtime';e={$_.LastWriteTimeUtc.ToString('o')}} | `+
 			`ConvertTo-Json -Compress`, psQuote(p)))
 	if err != nil {
 		return nil, err
@@ -132,9 +154,28 @@ func (t *transfer) ReadDir(ctx context.Context, p string) ([]usecase.RemoteFile,
 		if e.Length != nil {
 			size = *e.Length
 		}
-		out2 = append(out2, usecase.RemoteFile{Path: joined + e.Name, IsDir: e.IsContainer, Size: size})
+		var mt time.Time
+		if e.MTime != "" {
+			if parsed, perr := time.Parse(time.RFC3339, e.MTime); perr == nil {
+				mt = parsed.UTC()
+			}
+		}
+		out2 = append(out2, usecase.RemoteFile{Path: joined + e.Name, IsDir: e.IsContainer, Size: size, ModTime: mt})
 	}
 	return out2, nil
+}
+
+// Remove deletes a file or tree on the Windows host.
+func (t *transfer) Remove(ctx context.Context, p string) error {
+	_, err := t.ps(ctx, fmt.Sprintf(`Remove-Item -LiteralPath %s -Recurse -Force`, psQuote(p)))
+	return err
+}
+
+// SetMTime stamps a written file so later sync scans compare correctly.
+func (t *transfer) SetMTime(ctx context.Context, p string, mt time.Time) error {
+	_, err := t.ps(ctx, fmt.Sprintf(`(Get-Item -LiteralPath %s).LastWriteTimeUtc=[datetime]%s`,
+		psQuote(p), psQuote(mt.UTC().Format(time.RFC3339))))
+	return err
 }
 
 // parseDirJSON decodes ConvertTo-Json output, which is an object for one

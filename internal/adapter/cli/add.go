@@ -199,6 +199,8 @@ COMMANDS
                                run a remote command (banner-filtered)
   cp [-r] [options] <src> <dest>
                                copy files ([host:]path, local when bare)
+  sync [options] <src> <dest>  mirror src onto dest (half side default,
+                               --delete for everything, -w to watch)
 
 OUTPUT
   Default is a single-line JSON envelope {"ok","data","error"} for every

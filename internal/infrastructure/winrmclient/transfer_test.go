@@ -84,13 +84,16 @@ func (s *scriptInner) RunPSWithContext(_ context.Context, cmd string) (string, s
 
 func TestTransferStat(t *testing.T) {
 	in := &scriptInner{replies: map[string]scriptReply{
-		`'C:\t\f.txt'`: {stdout: `{"is_dir":false,"size":42}`},
+		`'C:\t\f.txt'`: {stdout: `{"is_dir":false,"size":42,"mtime":"2026-01-02T03:04:05Z"}`},
 		`'C:\missing'`: {stderr: "not found", code: 1},
 	}}
 	tr := &transfer{inner: in}
 	got, err := tr.Stat(context.Background(), `C:\t\f.txt`)
 	if err != nil || got.IsDir || got.Size != 42 {
 		t.Fatalf("got %+v %v", got, err)
+	}
+	if got.ModTime.Year() != 2026 || got.ModTime.Month() != 1 || got.ModTime.Day() != 2 {
+		t.Fatalf("mtime not parsed: %v", got.ModTime)
 	}
 	if !strings.Contains(in.scripts[0], `'C:\t\f.txt'`) {
 		t.Fatalf("path not quoted: %s", in.scripts[0])

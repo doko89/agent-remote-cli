@@ -36,6 +36,9 @@ type CopyResult struct {
 	DurationMs int64
 }
 
+func (r *CopyResult) addBytes(n int64) { r.Bytes += n }
+func (r *CopyResult) addFile()         { r.Files++ }
+
 // Copy moves one file or tree between local and remote sides. Either side is
 // local when its host name is empty. Remote-to-remote always routes through
 // a local temp file, so every protocol combination behaves identically.
@@ -129,7 +132,7 @@ func (c *copier) close() {
 }
 
 // copy dispatches on the four side combinations.
-func (c *copier) copy(ctx context.Context, src *domain.Host, srcPath string, dst *domain.Host, dstPath string, recursive bool, res *CopyResult) error {
+func (c *copier) copy(ctx context.Context, src *domain.Host, srcPath string, dst *domain.Host, dstPath string, recursive bool, res fileCounter) error {
 	switch {
 	case src == nil:
 		return c.upload(ctx, srcPath, dst, dstPath, recursive, res)
@@ -141,7 +144,7 @@ func (c *copier) copy(ctx context.Context, src *domain.Host, srcPath string, dst
 }
 
 // upload copies a local file or tree to a remote destination.
-func (c *copier) upload(ctx context.Context, localPath string, dst *domain.Host, dstPath string, recursive bool, res *CopyResult) error {
+func (c *copier) upload(ctx context.Context, localPath string, dst *domain.Host, dstPath string, recursive bool, res fileCounter) error {
 	d := c.clients[dst.Name]
 	info, err := os.Stat(localPath)
 	if err != nil {
@@ -156,7 +159,7 @@ func (c *copier) upload(ctx context.Context, localPath string, dst *domain.Host,
 	return c.uploadFile(ctx, d, localPath, dstPath, res)
 }
 
-func (c *copier) uploadFile(ctx context.Context, d TransferClient, localPath, dstPath string, res *CopyResult) error {
+func (c *copier) uploadFile(ctx context.Context, d TransferClient, localPath, dstPath string, res fileCounter) error {
 	if err := d.MkdirAll(ctx, d.Parent(dstPath)); err != nil {
 		return err
 	}
@@ -178,7 +181,7 @@ func (c *copier) uploadFile(ctx context.Context, d TransferClient, localPath, ds
 		if err := d.Finalize(ctx, dstPath); err != nil {
 			return err
 		}
-		res.Files++
+		res.addFile()
 		return nil
 	}
 	if err := c.streamToRemote(ctx, d, f, dstPath, res); err != nil {
@@ -187,7 +190,7 @@ func (c *copier) uploadFile(ctx context.Context, d TransferClient, localPath, ds
 	return d.Finalize(ctx, dstPath)
 }
 
-func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstDir string, res *CopyResult) error {
+func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstDir string, res fileCounter) error {
 	if err := d.MkdirAll(ctx, dstDir); err != nil {
 		return err
 	}
@@ -215,7 +218,7 @@ func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstD
 }
 
 // download copies a remote file or tree to a local destination.
-func (c *copier) download(ctx context.Context, src *domain.Host, srcPath, localPath string, recursive bool, res *CopyResult) error {
+func (c *copier) download(ctx context.Context, src *domain.Host, srcPath, localPath string, recursive bool, res fileCounter) error {
 	s := c.clients[src.Name]
 	info, err := s.Stat(ctx, srcPath)
 	if err != nil {
@@ -230,7 +233,7 @@ func (c *copier) download(ctx context.Context, src *domain.Host, srcPath, localP
 	return c.downloadFile(ctx, s, srcPath, localPath, res)
 }
 
-func (c *copier) downloadFile(ctx context.Context, s TransferClient, srcPath, localPath string, res *CopyResult) error {
+func (c *copier) downloadFile(ctx context.Context, s TransferClient, srcPath, localPath string, res fileCounter) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return domain.Fail(domain.CodeInvalidInput, "cannot create local directory: "+err.Error())
 	}
@@ -242,7 +245,7 @@ func (c *copier) downloadFile(ctx context.Context, s TransferClient, srcPath, lo
 	return c.streamFromRemote(ctx, s, srcPath, f, res)
 }
 
-func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, localDir string, res *CopyResult) error {
+func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, localDir string, res fileCounter) error {
 	if err := os.MkdirAll(localDir, 0o755); err != nil {
 		return domain.Fail(domain.CodeInvalidInput, "cannot create local directory: "+err.Error())
 	}
@@ -271,7 +274,7 @@ func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, loca
 // relay routes remote-to-remote through local staging. The download phase
 // counts into a scratch result; only the upload phase counts for real, so
 // each file is counted exactly once.
-func (c *copier) relay(ctx context.Context, src *domain.Host, srcPath string, dst *domain.Host, dstPath string, recursive bool, res *CopyResult) error {
+func (c *copier) relay(ctx context.Context, src *domain.Host, srcPath string, dst *domain.Host, dstPath string, recursive bool, res fileCounter) error {
 	s := c.clients[src.Name]
 	d := c.clients[dst.Name]
 	info, err := s.Stat(ctx, srcPath)
@@ -309,7 +312,7 @@ func (c *copier) relay(ctx context.Context, src *domain.Host, srcPath string, ds
 }
 
 // uploadStagedFile uploads a temp file staged by relay and counts it.
-func (c *copier) uploadStagedFile(ctx context.Context, d TransferClient, tmpName, dstPath string, res *CopyResult) error {
+func (c *copier) uploadStagedFile(ctx context.Context, d TransferClient, tmpName, dstPath string, res fileCounter) error {
 	f, err := os.Open(tmpName)
 	if err != nil {
 		return domain.Fail(domain.CodeInternal, "cannot open temp file: "+err.Error())
@@ -325,7 +328,7 @@ func (c *copier) uploadStagedFile(ctx context.Context, d TransferClient, tmpName
 }
 
 // streamToRemote copies one open local file to a remote path.
-func (c *copier) streamToRemote(ctx context.Context, d TransferClient, f *os.File, dstPath string, res *CopyResult) error {
+func (c *copier) streamToRemote(ctx context.Context, d TransferClient, f *os.File, dstPath string, res fileCounter) error {
 	first := true
 	buf := make([]byte, copyBlockSize)
 	for {
@@ -338,7 +341,7 @@ func (c *copier) streamToRemote(ctx context.Context, d TransferClient, f *os.Fil
 				return err
 			}
 			first = false
-			res.Bytes += int64(n)
+			res.addBytes(int64(n))
 		}
 		if rerr == io.EOF {
 			break
@@ -347,12 +350,12 @@ func (c *copier) streamToRemote(ctx context.Context, d TransferClient, f *os.Fil
 			return domain.Fail(domain.CodeInternal, "cannot read local file: "+rerr.Error())
 		}
 	}
-	res.Files++
+	res.addFile()
 	return nil
 }
 
 // streamFromRemote copies one remote file to an open local file.
-func (c *copier) streamFromRemote(ctx context.Context, s TransferClient, srcPath string, f *os.File, res *CopyResult) error {
+func (c *copier) streamFromRemote(ctx context.Context, s TransferClient, srcPath string, f *os.File, res fileCounter) error {
 	var offset int64
 	for {
 		if err := ctx.Err(); err != nil {
@@ -369,12 +372,12 @@ func (c *copier) streamFromRemote(ctx context.Context, s TransferClient, srcPath
 			return domain.Fail(domain.CodeInternal, "cannot write local file: "+err.Error())
 		}
 		offset += int64(len(chunk))
-		res.Bytes += int64(len(chunk))
+		res.addBytes(int64(len(chunk)))
 		if len(chunk) < copyBlockSize {
 			break
 		}
 	}
-	res.Files++
+	res.addFile()
 	return nil
 }
 

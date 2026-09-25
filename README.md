@@ -32,6 +32,11 @@ agent-remote cp report.txt w1:C:/temp/
 agent-remote cp w1:C:/temp/report.txt .
 agent-remote cp -r ./dist web1:/opt/app
 agent-remote cp web1:/var/log/app.log w1:C:/t/   # remote-to-remote
+
+# Mirror hemat ala rsync: hanya yang baru/berubah disalin
+agent-remote sync ./dist web1:/opt/app        # half side: tak pernah hapus
+agent-remote sync --delete ./dist web1:/opt/app   # everything: hapus sisanya
+agent-remote sync -w --interval 5s ./dist web1:/opt/app   # pantau sampai Ctrl-C
 ```
 
 Config tersimpan di `~/.config/agent-remote/hosts.json`

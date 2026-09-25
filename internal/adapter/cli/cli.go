@@ -94,6 +94,8 @@ func dispatch(cmd string, rest []string, opt Options, d Deps) Outcome {
 		return runExec(rest, opt, d)
 	case "cp":
 		return runCp(rest, opt, d)
+	case "sync":
+		return runSync(rest, opt, d)
 	case "help", "--help", "-h", "":
 		return Outcome{RawOut: usage(opt.Version), Data: map[string]any{"help": usage(opt.Version)}}
 	case "version", "--version":

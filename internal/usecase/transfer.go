@@ -9,11 +9,13 @@ import (
 
 // RemoteFile describes one remote directory entry. Path is always the full
 // remote path, joined by the client that listed it (remote separators differ
-// per OS, so the use case never joins remote paths itself).
+// per OS, so the use case never joins remote paths itself). ModTime is UTC;
+// the use case compares it with a tolerance window for clock skew.
 type RemoteFile struct {
-	Path  string
-	IsDir bool
-	Size  int64
+	Path    string
+	IsDir   bool
+	Size    int64
+	ModTime time.Time
 }
 
 // TransferClient is per-host file access behind `cp`. Transfers stream in
@@ -31,6 +33,10 @@ type TransferClient interface {
 	// Finalize completes an uploaded file (e.g. decoding staged text into
 	// bytes on WinRM). No-op where AppendChunk lands directly.
 	Finalize(ctx context.Context, path string) error
+	// Remove deletes a file or empty directory.
+	Remove(ctx context.Context, path string) error
+	// SetMTime stamps a just-written file so later scans can compare it.
+	SetMTime(ctx context.Context, path string, mt time.Time) error
 	// Parent returns the containing directory of a remote path.
 	Parent(path string) string
 	Close() error
@@ -47,3 +53,10 @@ const (
 	copyBlockSize     = 256 * 1024
 	copyDefaultTimout = 10 * time.Minute
 )
+
+// fileCounter abstracts result counting so cp and sync share the streaming
+// paths while reporting into their own result types.
+type fileCounter interface {
+	addBytes(n int64)
+	addFile()
+}

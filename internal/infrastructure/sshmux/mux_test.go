@@ -66,7 +66,7 @@ func TestMuxRoundTrip(t *testing.T) {
 func TestMuxNoMaster(t *testing.T) {
 	t.Setenv("AGENT_REMOTE_CONFIG", filepath.Join(t.TempDir(), "hosts.json"))
 	hub := NewHub()
-	if c := hub.TryDial(muxHost("ghost")); c != nil {
+	if hub.TryDial(muxHost("ghost")) != nil {
 		t.Fatal("TryDial must return nil without a master")
 	}
 }

@@ -396,7 +396,7 @@ func runSingleExec(d Deps, opt Options, name string, e execFlags) Outcome {
 		Host: h.Name, Command: e.command,
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode,
 		DurationMs: res.DurationMs, Filtered: res.Filtered,
-		DroppedLines: res.DroppedLines, PreAuthBanner: res.PreAuthBanner,
+		DroppedLines: res.DroppedLines, PreAuthBanner: res.PreAuthBanner, Sudo: e.sudo,
 	}
 	return Outcome{Data: view, RawOut: res.Stdout, RawErr: res.Stderr, RemoteRan: true, RemoteExit: res.ExitCode}
 }
@@ -416,7 +416,7 @@ func runFanout(d Deps, targets []domain.Host, opt usecase.ExecOptions, parallel 
 			Host: r.Host, Command: opt.Command,
 			Stdout: r.Res.Stdout, Stderr: r.Res.Stderr, ExitCode: r.Res.ExitCode,
 			DurationMs: r.Res.DurationMs, Filtered: r.Res.Filtered,
-			DroppedLines: r.Res.DroppedLines, PreAuthBanner: r.Res.PreAuthBanner,
+			DroppedLines: r.Res.DroppedLines, PreAuthBanner: r.Res.PreAuthBanner, Sudo: opt.Sudo,
 		}
 		if r.Err != nil {
 			v.Error = r.Err.Error()
@@ -428,7 +428,7 @@ func runFanout(d Deps, targets []domain.Host, opt usecase.ExecOptions, parallel 
 		raws = append(raws, "── "+r.Host+"\n"+r.Res.Stdout)
 	}
 	return Outcome{
-		Data:       map[string]any{"command": opt.Command, "results": views},
+		Data:       map[string]any{"command": opt.Command, "sudo": opt.Sudo, "results": views},
 		RawOut:     strings.Join(raws, "\n"),
 		RemoteRan:  true,
 		RemoteExit: worst,

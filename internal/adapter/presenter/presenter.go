@@ -106,6 +106,7 @@ type ExecView struct {
 	DroppedLines  int    `json:"dropped_lines"`
 	PreAuthBanner string `json:"pre_auth_banner,omitempty"`
 	Error         string `json:"error,omitempty"`
+	Sudo          bool   `json:"sudo,omitempty"`
 }
 
 // TestView is the JSON data body for `test`.

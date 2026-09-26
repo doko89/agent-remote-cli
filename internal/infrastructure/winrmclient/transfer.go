@@ -75,8 +75,15 @@ func winParent(p string) string {
 			break
 		}
 	}
-	if best <= 0 {
-		return p
+	if best < 0 {
+		// "C:" is a drive root: its parent is itself.
+		if len(p) == 2 && p[1] == ':' {
+			return p
+		}
+		return "."
+	}
+	if best == 0 {
+		return p[:1]
 	}
 	return p[:best]
 }

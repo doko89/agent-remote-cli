@@ -263,6 +263,27 @@ func TestCopyEmptyFile(t *testing.T) {
 	}
 }
 
+// TestCopyRelayEmptyFile proves a zero-byte remote-to-remote relay creates
+// the destination file even when AppendChunk never flows (SFTP no-op).
+func TestCopyRelayEmptyFile(t *testing.T) {
+	store := cpStore()
+	r1 := newMemRemote()
+	r2 := newMemRemote()
+	r1.files["/x/empty"] = []byte{}
+	factory := memTFactory{remotes: map[string]*memRemote{"r1": r1, "r2": r2}}
+	res, err := Copy(context.Background(), store, stubSecrets{}, factory,
+		CopyRequest{SrcHost: "r1", SrcPath: "/x/empty", DstHost: "r2", DstPath: "/y/empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Files != 1 || res.Bytes != 0 {
+		t.Fatalf("counts wrong: %+v", res)
+	}
+	if _, ok := r2.files["/y/empty"]; !ok {
+		t.Fatal("zero-byte relay file not created on destination")
+	}
+}
+
 // TestCopyFileToExistingDir pins scp semantics: a single-file copy whose
 // destination is an existing directory lands inside it under the source
 // basename — on every side combination. Proven live: without this, SSH

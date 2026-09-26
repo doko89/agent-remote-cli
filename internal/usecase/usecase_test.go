@@ -158,6 +158,29 @@ func TestExecNoFilterKeepsBanner(t *testing.T) {
 	}
 }
 
+// TestExecNoFilterSkipsInvalidPatterns proves --no-filter bypasses pattern
+// compilation so an invalid stored regex never blocks an unfiltered exec.
+func TestExecNoFilterSkipsInvalidPatterns(t *testing.T) {
+	store := &memStore{hosts: map[string]domain.Host{}}
+	if _, err := AddHost(store, sshInput("web1")); err != nil {
+		t.Fatal(err)
+	}
+	hosts, _ := store.Load()
+	h := hosts["web1"]
+	h.Filter.ExtraPatterns = []string{"(["}
+	hosts["web1"] = h
+	store.Save(hosts)
+	stub := &stubClient{execRes: domain.ExecResult{Stdout: "raw\n"}}
+	_, res, err := Exec(context.Background(), store, stubSecrets{}, stubFactory{stub},
+		"web1", ExecOptions{Command: "x", NoFilter: true})
+	if err != nil {
+		t.Fatalf("--no-filter must skip invalid patterns: %v", err)
+	}
+	if res.Stdout != "raw\n" || res.Filtered {
+		t.Fatalf("output must be raw: %+v", res)
+	}
+}
+
 func TestExecUnknownHost(t *testing.T) {
 	store := &memStore{hosts: map[string]domain.Host{}}
 	_, _, err := Exec(context.Background(), store, stubSecrets{}, stubFactory{&stubClient{}},

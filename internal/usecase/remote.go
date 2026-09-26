@@ -57,6 +57,8 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	cfg := h.Filter
 	if opt.NoFilter {
 		cfg.Enabled = false
+		res.Filtered = false
+		return h, res, nil
 	}
 	extra, err := domain.CompilePatterns(h.Filter.ExtraPatterns)
 	if err != nil {

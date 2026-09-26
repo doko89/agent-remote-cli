@@ -318,8 +318,22 @@ func (c *copier) uploadStagedFile(ctx context.Context, d TransferClient, tmpName
 		return domain.Fail(domain.CodeInternal, "cannot open temp file: "+err.Error())
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return domain.Fail(domain.CodeInternal, "cannot stat temp file: "+err.Error())
+	}
 	if err := d.MkdirAll(ctx, d.Parent(dstPath)); err != nil {
 		return err
+	}
+	if fi.Size() == 0 {
+		if err := d.AppendChunk(ctx, dstPath, nil, true); err != nil {
+			return err
+		}
+		if err := d.Finalize(ctx, dstPath); err != nil {
+			return err
+		}
+		res.addFile()
+		return nil
 	}
 	if err := c.streamToRemote(ctx, d, f, dstPath, res); err != nil {
 		return err

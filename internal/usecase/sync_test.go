@@ -145,6 +145,38 @@ func TestSyncRejects(t *testing.T) {
 	}
 }
 
+// TestSyncDirReplacesFile proves sync removes a destination file when the
+// source has a directory at the same relative path, then creates the dir.
+func TestSyncDirReplacesFile(t *testing.T) {
+	src := newMemRemote()
+	src.dirs["/s"] = true
+	src.dirs["/s/sub"] = true
+	src.files["/s/sub/a.txt"] = []byte("nested")
+	src.mtimes["/s/sub/a.txt"] = t1
+	dst := newMemRemote()
+	dst.dirs["/d"] = true
+	dst.files["/d/sub"] = []byte("stale-file")
+	dst.mtimes["/d/sub"] = t0
+	factory := syncFactory(src, dst)
+	res, err := SyncOneShot(context.Background(), syncStore(), stubSecrets{}, factory,
+		SyncRequest{SrcHost: "r1", SrcPath: "/s", DstHost: "r2", DstPath: "/d"})
+	if err != nil {
+		t.Fatalf("sync must succeed when replacing file with dir: %v", err)
+	}
+	if res.Files != 1 {
+		t.Fatalf("expected 1 copied file: %+v", res)
+	}
+	if _, ok := dst.files["/d/sub"]; ok {
+		t.Fatal("destination file not replaced by directory")
+	}
+	if !dst.dirs["/d/sub"] {
+		t.Fatal("destination directory not created")
+	}
+	if string(dst.files["/d/sub/a.txt"]) != "nested" {
+		t.Fatalf("nested file not synced: %v", dst.files)
+	}
+}
+
 // TestWatchCopiesOnChange proves the watch loop picks up a change made
 // after an earlier scan. Everything runs on Watch's own goroutine (the hook
 // mutates and cancels), so the test is deterministic with no sleeps.

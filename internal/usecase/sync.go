@@ -219,8 +219,14 @@ func (s *syncer) scan(ctx context.Context, res *SyncResult, opt SyncOptions) err
 func (s *syncer) syncEntry(ctx context.Context, se treeEntry, dstTree map[string]treeEntry, res *SyncResult, opt SyncOptions) error {
 	dstFull := joinSide(s.dst, se.rel)
 	if se.isDir {
-		if _, ok := dstTree[se.rel]; ok {
-			return nil
+		if de, ok := dstTree[se.rel]; ok {
+			if de.isDir {
+				return nil
+			}
+			if err := removeTree(ctx, s.dst, de.full); err != nil {
+				return err
+			}
+			delete(dstTree, se.rel)
 		}
 		if err := mkdirSide(ctx, s.dst, dstFull); err != nil {
 			return err

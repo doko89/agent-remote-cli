@@ -2,6 +2,7 @@ package winrmclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
@@ -31,6 +32,7 @@ import (
 type rawNTLM struct {
 	user     string
 	password string
+	ctx      context.Context
 
 	url         string
 	dialTimeout time.Duration
@@ -191,7 +193,7 @@ func sealMessage(nc *bodgitntlm.Client, payload string) ([]byte, error) {
 
 // roundSealed POSTs a sealed envelope with the encrypted content type.
 func (t *rawNTLM) roundSealed(sealed []byte, auth string) (*http.Response, error) {
-	req, err := http.NewRequest("POST", t.url, bytes.NewReader(sealed)) //nolint:noctx // bounded by http.Client.Timeout
+	req, err := http.NewRequestWithContext(t.ctx, "POST", t.url, bytes.NewReader(sealed))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
@@ -284,7 +286,7 @@ func u32le(n int) []byte {
 // response for the caller to consume. A 401 without credentials is the
 // expected handshake step, not an error.
 func (t *rawNTLM) round(payload, auth string) (*http.Response, error) {
-	req, err := http.NewRequest("POST", t.url, strings.NewReader(payload)) //nolint:noctx // bounded by http.Client.Timeout
+	req, err := http.NewRequestWithContext(t.ctx, "POST", t.url, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}

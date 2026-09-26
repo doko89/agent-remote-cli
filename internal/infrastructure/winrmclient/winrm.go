@@ -47,19 +47,21 @@ func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient
 	// yet reject SPNEGO-wrapped NTLM while accepting raw NTLM (verified
 	// live; matches pywinrm/requests-ntlm behavior). Basic auth stays
 	// unavailable unless the server enables it.
+	transport := &rawNTLM{user: h.User, password: password, ctx: context.Background()}
 	params := winrm.NewParameters("PT60S", "en-US", 153600)
 	params.TransportDecorator = func() winrm.Transporter {
-		return &rawNTLM{user: h.User, password: password}
+		return transport
 	}
 	c, err := winrm.NewClientWithParameters(ep, h.User, password, params)
 	if err != nil {
 		return nil, classify(err)
 	}
-	return &client{inner: c}, nil
+	return &client{inner: c, transport: transport}, nil
 }
 
 type client struct {
-	inner *winrm.Client
+	inner     *winrm.Client
+	transport *rawNTLM
 }
 
 func (c *client) Close() error { return nil }
@@ -71,6 +73,7 @@ func (c *client) Test(ctx context.Context) (domain.TestResult, error) {
 	var last error
 	backoff := 500 * time.Millisecond
 	for attempt := 0; attempt < 3; attempt++ {
+		c.transport.ctx = ctx
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -95,6 +98,7 @@ func (c *client) Test(ctx context.Context) (domain.TestResult, error) {
 // repeat side effects on the target.
 func (c *client) Exec(ctx context.Context, cmd string) (domain.ExecResult, error) {
 	start := time.Now()
+	c.transport.ctx = ctx
 	stdout, stderr, code, err := c.inner.RunPSWithContext(ctx, cmd)
 	res := domain.ExecResult{
 		Stdout:     stdout,

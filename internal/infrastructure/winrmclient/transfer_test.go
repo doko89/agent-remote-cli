@@ -24,6 +24,8 @@ func TestWinParent(t *testing.T) {
 		`C:/temp/file.txt`: `C:/temp`,
 		`C:\temp\`:         `C:`,
 		`C:`:               `C:`,
+		`output.txt`:       `.`,
+		`/file.txt`:        `/`,
 	} {
 		if got := winParent(in); got != want {
 			t.Fatalf("%q -> %q, want %q", in, got, want)

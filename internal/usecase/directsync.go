@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -68,10 +69,12 @@ type DirectSyncConfig struct {
 // signal), it cleans up the key from both servers. The returned function
 // must be called for guaranteed cleanup (use with defer or signal handler).
 func DirectSync(ctx context.Context, store HostStore, secrets SecretResolver, factory NewClienter, cfg DirectSyncConfig) (func(), error) {
+	fmt.Fprintf(os.Stderr, "[direct-sync] generating keypair\n")
 	key, err := generateEphemeralKey()
 	if err != nil {
 		return nil, err
 	}
+	fmt.Fprintf(os.Stderr, "[direct-sync] keypair generated\n")
 	privPath := "/tmp/" + keyPrefix + key.ID
 
 	cleanup := func() {
@@ -82,6 +85,7 @@ func DirectSync(ctx context.Context, store HostStore, secrets SecretResolver, fa
 	}
 
 	// Push pubkey to destination.
+	fmt.Fprintf(os.Stderr, "[direct-sync] pushing pubkey to %s\n", cfg.DstHost)
 	pushPub := fmt.Sprintf(`mkdir -p ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`, strings.TrimSpace(key.Public))
 	_, _, err = Exec(ctx, store, secrets, factory, cfg.DstHost, ExecOptions{Command: pushPub})
 	if err != nil {
@@ -90,14 +94,20 @@ func DirectSync(ctx context.Context, store HostStore, secrets SecretResolver, fa
 	}
 
 	// Push privkey to source.
+	fmt.Fprintf(os.Stderr, "[direct-sync] pushing privkey to %s\n", cfg.SrcHost)
 	pushPriv := fmt.Sprintf(`echo '%s' > %s && chmod 600 %s`, key.Private, privPath, privPath)
 	_, _, err = Exec(ctx, store, secrets, factory, cfg.SrcHost, ExecOptions{Command: pushPriv})
 	if err != nil {
 		cleanup()
 		return nil, domain.Fail(domain.CodeConnectionFailed, "push privkey to "+cfg.SrcHost+": "+err.Error())
 	}
+	fmt.Fprintf(os.Stderr, "[direct-sync] privkey pushed, verifying...\n")
+	_, verifyRes, err := Exec(ctx, store, secrets, factory, cfg.SrcHost,
+		ExecOptions{Command: fmt.Sprintf("ls -la %s", privPath)})
+	fmt.Fprintf(os.Stderr, "[direct-sync] verify: err=%v exit=%d stdout=%q stderr=%q\n", err, verifyRes.ExitCode, verifyRes.Stdout, verifyRes.Stderr)
 
 	// Build and run the watch pipeline on the source.
+	fmt.Fprintf(os.Stderr, "[direct-sync] starting watch on %s\n", cfg.SrcHost)
 	watchCmd := buildWatchScript(cfg, privPath)
 	_, _, execErr := Exec(ctx, store, secrets, factory, cfg.SrcHost,
 		ExecOptions{Command: watchCmd, Timeout: directSyncMaxTimeout})
@@ -129,8 +139,8 @@ touch "$MARKER"
 find "%s" -type f 2>/dev/null | while IFS= read -r file; do
   relative="${file#%s/}"
   dir=$(dirname "%s/$relative")
-  ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
-  scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative"
+  ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'" < /dev/null
+  scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative" < /dev/null
 done
 while sleep 2; do
   CHANGED=$(find "%s" -newer "$MARKER" -type f 2>/dev/null)
@@ -138,8 +148,8 @@ while sleep 2; do
     echo "$CHANGED" | while IFS= read -r file; do
       relative="${file#%s/}"
       dir=$(dirname "%s/$relative")
-      ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
-      scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative"
+      ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'" < /dev/null
+      scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative" < /dev/null
     done
     touch "$MARKER"
   fi

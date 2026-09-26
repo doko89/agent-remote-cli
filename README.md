@@ -27,6 +27,7 @@ agent-remote rm web1            # juga membersihkan secret keyring
 # Validasi tanpa efek samping, lalu eksekusi (separator `--` wajib)
 agent-remote test web1
 agent-remote exec web1 -- df -h /
+agent-remote exec web1 --login -- which bun   # bash -lic: PATH profil user aktif
 
 # Connection reuse ala ControlPersist (default aktif, idle 10m)
 agent-remote exec web1 -- uptime   # exec ke-2 dst. tanpa handshake ulang

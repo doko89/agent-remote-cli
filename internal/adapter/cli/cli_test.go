@@ -43,6 +43,23 @@ func (stubFactory) NewClient(domain.Host, string) (usecase.RemoteClient, error) 
 	return stubClient{}, nil
 }
 
+type recClient struct{ cmd string }
+
+func (r *recClient) Test(context.Context) (domain.TestResult, error) {
+	return domain.TestResult{Reachable: true}, nil
+}
+func (r *recClient) Exec(_ context.Context, cmd string) (domain.ExecResult, error) {
+	r.cmd = cmd
+	return domain.ExecResult{ExitCode: 0}, nil
+}
+func (r *recClient) Close() error { return nil }
+
+type recFactory struct{ client *recClient }
+
+func (f recFactory) NewClient(domain.Host, string) (usecase.RemoteClient, error) {
+	return f.client, nil
+}
+
 func testDeps() Deps {
 	return Deps{Store: &memStore{hosts: map[string]domain.Host{}}, Secrets: stubSecrets{}, Factory: stubFactory{}}
 }
@@ -276,5 +293,42 @@ func TestExitCodeMapping(t *testing.T) {
 	}
 	if (Outcome{}).ExitCode() != ExitOK {
 		t.Fatal("empty outcome must map to exit 0")
+	}
+}
+
+func TestLoginWrapQuoting(t *testing.T) {
+	got := loginWrap(`echo 'hi'`)
+	want := `bash -lic 'echo '\''hi'\'''`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestExecLoginFlag(t *testing.T) {
+	rec := &recClient{}
+	deps := testDeps()
+	deps.Factory = recFactory{rec}
+	opt := Options{Version: "test"}
+	if out, _ := Run([]string{"add", "ssh", "h", "--host", "a", "--user", "u",
+		"--auth", "env", "--auth-ref", "PW"}, opt, deps); out.ToolErr != nil {
+		t.Fatalf("add: %v", out.ToolErr)
+	}
+	if out, _ := Run([]string{"exec", "h", "--", "which", "bun"}, opt, deps); out.ToolErr != nil {
+		t.Fatalf("exec: %v", out.ToolErr)
+	}
+	if rec.cmd != "which bun" {
+		t.Fatalf("default must pass through, got %q", rec.cmd)
+	}
+	if out, _ := Run([]string{"exec", "h", "--login", "--", "which", "bun"}, opt, deps); out.ToolErr != nil {
+		t.Fatalf("exec --login: %v", out.ToolErr)
+	}
+	if rec.cmd != `bash -lic 'which bun'` {
+		t.Fatalf("login wrap wrong: %q", rec.cmd)
+	}
+	if out, _ := Run([]string{"exec", "h", "--login", "--", `echo 'a b'`}, opt, deps); out.ToolErr != nil {
+		t.Fatalf("exec quoted: %v", out.ToolErr)
+	}
+	if rec.cmd != `bash -lic 'echo '\''a b'\'''` {
+		t.Fatalf("login quoting wrong: %q", rec.cmd)
 	}
 }

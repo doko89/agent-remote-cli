@@ -274,7 +274,7 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 	}
 	if sep < 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput,
-			"missing `--` separator: usage: exec <name> [--timeout 30s] [--no-filter] -- <command...>"))
+			"missing `--` separator: usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
 	}
 	left, remote := args[:sep], args[sep+1:]
 	if len(remote) == 0 {
@@ -282,23 +282,27 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 	}
 	if len(left) == 0 || strings.HasPrefix(left[0], "-") {
 		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: exec <name> [--timeout 30s] [--no-filter] -- <command...>"))
+			"usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
 	}
 	name, leftFlags := left[0], left[1:]
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	timeout := fs.Duration("timeout", 30*time.Second, "")
 	noFilter := fs.Bool("no-filter", false, "")
+	login := fs.Bool("login", false, "")
 	pwStdin := fs.Bool("password-stdin", false, "")
 	pwEnv := fs.String("password-env", "", "")
 	if err := fs.Parse(leftFlags); err != nil || len(fs.Args()) != 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: exec <name> [--timeout 30s] [--no-filter] -- <command...>"))
+			"usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
 	}
 	if *timeout <= 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "timeout must be positive"))
 	}
 	command := strings.Join(remote, " ")
+	if *login {
+		command = loginWrap(command)
+	}
 	h, res, err := usecase.Exec(context.Background(), d.Store, overrideSecrets(d, opt, *pwStdin, *pwEnv), d.Factory, name,
 		usecase.ExecOptions{Command: command, Timeout: *timeout, NoFilter: *noFilter})
 	if err != nil {
@@ -311,6 +315,14 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 		DroppedLines: res.DroppedLines, PreAuthBanner: res.PreAuthBanner,
 	}
 	return Outcome{Data: view, RawOut: res.Stdout, RawErr: res.Stderr, RemoteRan: true, RemoteExit: res.ExitCode}
+}
+
+// loginWrap runs cmd through a bash login+interactive shell so the full
+// user profile chain applies (~/.profile -> ~/.bashrc past its interactive
+// guard, e.g. ~/.bun/bin) while staying PTY-free. -i without a TTY makes
+// bash emit two job-control warnings on stderr; stdout stays clean.
+func loginWrap(cmd string) string {
+	return "bash -lic '" + strings.ReplaceAll(cmd, "'", `'\''`) + "'"
 }
 
 // parseSimple is a minimal parser for commands with no flags.

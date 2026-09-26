@@ -200,8 +200,12 @@ COMMANDS
   list                         list hosts (never shows secrets)
   show <name>                  show one host (never shows secrets)
   test <name> [--timeout 30s]  handshake-only connectivity check
-  exec <name> [options] -- <command...>
-                               run a remote command (banner-filtered)
+  exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>
+                               run a remote command (banner-filtered);
+                               --login wraps it in 'bash -lic' so the full
+                               user profile PATH applies (still no PTY;
+                               bash may log 2 job-control warnings to
+                               stderr because there is no TTY)
   cp [-r] [options] <src> <dest>
                                copy files ([host:]path, local when bare)
   sync [options] <src> <dest>  mirror src onto dest (half side default,

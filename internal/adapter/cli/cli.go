@@ -14,6 +14,7 @@ import (
 
 	"agent-remote/internal/adapter/presenter"
 	"agent-remote/internal/domain"
+	"agent-remote/internal/infrastructure/secret"
 	"agent-remote/internal/usecase"
 )
 
@@ -85,6 +86,8 @@ func dispatch(cmd string, rest []string, opt Options, d Deps) Outcome {
 		return runAdd(rest, opt, d)
 	case "rm":
 		return runRm(rest, opt, d)
+	case "rename":
+		return runRename(rest, opt, d)
 	case "list":
 		return runList(rest, d)
 	case "show":
@@ -161,6 +164,46 @@ func runRm(args []string, opt Options, d Deps) Outcome {
 	return Outcome{
 		Data:   map[string]any{"removed": name},
 		RawOut: "removed host " + name,
+	}
+}
+
+// runRename implements: rename <old> <new>. The stored keyring secret
+// travels with the host; auth=env/stdin/keyfile references need no move.
+// Order matters: the new keyring entry is written before the store rename
+// so a keyring failure aborts with nothing changed, and a store failure
+// rolls the new secret back.
+func runRename(args []string, opt Options, d Deps) Outcome {
+	_, positional, err := parseSimple(args, "rename <old> <new>", "")
+	if err != nil {
+		return fail(err)
+	}
+	if len(positional) != 2 {
+		return fail(domain.Fail(domain.CodeInvalidInput, "usage: rename <old> <new>"))
+	}
+	from, to := strings.TrimSpace(positional[0]), strings.TrimSpace(positional[1])
+	if from == "" || to == "" || from == to {
+		return fail(domain.Fail(domain.CodeInvalidInput, "usage: rename <old> <new> (names must differ and be non-empty)"))
+	}
+	var movedSecret bool
+	if pw, lerr := secret.Load(from); lerr == nil {
+		if serr := secret.Save(to, pw); serr != nil {
+			return fail(serr)
+		}
+		movedSecret = true
+	}
+	h, rerr := usecase.RenameHost(d.Store, from, to)
+	if rerr != nil {
+		if movedSecret {
+			secret.Delete(to)
+		}
+		return fail(rerr)
+	}
+	if movedSecret {
+		secret.Delete(from)
+	}
+	return Outcome{
+		Data:   map[string]any{"from": from, "to": to, "host": presenter.ViewHost(h)},
+		RawOut: fmt.Sprintf("renamed host %s -> %s", from, to),
 	}
 }
 

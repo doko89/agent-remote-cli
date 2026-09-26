@@ -196,6 +196,7 @@ COMMANDS
   add ssh <name> [options]     register a new SSH host
   add winrm <name> [options]   register a new WinRM host
   rm <name>                    remove a host and its stored secret
+  rename <old> <new>           rename a host (moves its stored secret)
   list                         list hosts (never shows secrets)
   show <name>                  show one host (never shows secrets)
   test <name> [--timeout 30s]  handshake-only connectivity check

@@ -137,6 +137,30 @@ func TestManageFlows(t *testing.T) {
 	}
 }
 
+func TestRenameFlow(t *testing.T) {
+	deps := testDeps()
+	opt := Options{Version: "test"}
+	add := []string{"add", "ssh", "h", "--host", "a", "--user", "u", "--auth", "env", "--auth-ref", "PW"}
+	if out, _ := Run(add, opt, deps); out.ToolErr != nil {
+		t.Fatalf("add: %v", out.ToolErr)
+	}
+	if out, _ := Run([]string{"rename", "h", "h2"}, opt, deps); out.ToolErr != nil {
+		t.Fatalf("rename: %v", out.ToolErr)
+	}
+	if hosts, _ := deps.Store.Load(); len(hosts) != 1 || hosts["h2"].Name != "h2" {
+		t.Fatalf("store after rename: %+v", hosts)
+	}
+	if out, _ := Run([]string{"show", "h"}, opt, deps); domain.CodeOf(out.ToolErr) != domain.CodeHostNotFound {
+		t.Fatalf("old name must be gone: %+v", out)
+	}
+	if out, _ := Run([]string{"rename", "ghost", "x"}, opt, deps); domain.CodeOf(out.ToolErr) != domain.CodeHostNotFound {
+		t.Fatalf("missing old: %+v", out)
+	}
+	if out, _ := Run([]string{"rename", "h2", "h2"}, opt, deps); domain.CodeOf(out.ToolErr) != domain.CodeInvalidInput {
+		t.Fatalf("same name: %+v", out)
+	}
+}
+
 func TestUnknownAndHelp(t *testing.T) {
 	opt := Options{Version: "v1"}
 	deps := testDeps()

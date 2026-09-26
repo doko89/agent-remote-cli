@@ -97,6 +97,24 @@ func Save(hostName, pw string) error {
 	return nil
 }
 
+// Load returns the stored keyring password for a host, or an error when no
+// entry exists (renames distinguish "no stored secret" from failures).
+func Load(hostName string) (string, error) {
+	pw, err := keyring.Get(Service, hostName)
+	if err != nil {
+		return "", domain.Fail(domain.CodeSecretUnavailable,
+			fmt.Sprintf("no keyring secret for host %s: %v", hostName, err))
+	}
+	return pw, nil
+}
+
+// Delete removes a keyring entry. Like Resolver.Delete it treats missing
+// entries and unavailable keyrings as best-effort: callers must not fail
+// host management over secret cleanup.
+func Delete(hostName string) {
+	_ = keyring.Delete(Service, hostName)
+}
+
 // Delete removes the host's keyring entry, if any. Missing entries and
 // unavailable keyrings are not errors: host removal must always succeed.
 func (r *Resolver) Delete(hostName string) error {

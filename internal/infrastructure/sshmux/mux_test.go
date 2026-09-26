@@ -2,6 +2,7 @@ package sshmux
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -119,6 +120,48 @@ func TestMuxStaleSocketRecovered(t *testing.T) {
 		t.Fatalf("stale socket must be recovered, got %v", err)
 	}
 	hub.Wait()
+}
+
+// TestMuxStaleSocketRemovedOnTryDial proves TryDial deletes a dead master's
+// socket file so Offer never trips over stale debris.
+func TestMuxStaleSocketRemovedOnTryDial(t *testing.T) {
+	t.Setenv("AGENT_REMOTE_CONFIG", filepath.Join(t.TempDir(), "hosts.json"))
+	dir, err := defaultDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Skip(err)
+	}
+	path := socketPath(dir, muxHost("dead"))
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skip(err)
+	}
+	ln.Close() // file remains, no listener
+
+	hub := NewHub()
+	if c := hub.TryDial(muxHost("dead")); c != nil {
+		t.Fatal("TryDial must return nil for a dead socket")
+	}
+	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+		t.Fatal("stale socket file must be removed")
+	}
+}
+
+// TestMuxErrorSentPhases pins the retry-safety boundary: dial failure means
+// nothing was sent (safe to re-run on a fresh connection).
+func TestMuxErrorSentPhases(t *testing.T) {
+	t.Setenv("AGENT_REMOTE_CONFIG", filepath.Join(t.TempDir(), "hosts.json"))
+	c := &muxClient{path: filepath.Join(t.TempDir(), "nope.sock")}
+	_, err := c.round(context.Background(), request{Command: "x"})
+	var me *MuxError
+	if err == nil || !errors.As(err, &me) {
+		t.Fatalf("round must return MuxError, got %v", err)
+	}
+	if me.Sent {
+		t.Fatal("dial failure must be Sent=false")
+	}
 }
 
 func TestMuxMasterAliveRejected(t *testing.T) {

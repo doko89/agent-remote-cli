@@ -41,6 +41,20 @@ const DefaultTTL = 10 * time.Minute
 // serves the host; the fresh connection should be used and closed normally.
 var ErrMasterAlive = errors.New("sshmux: master already alive")
 
+// MuxError reports a mux transport failure. Sent marks the retry safety
+// boundary: false means the request never reached the master process, so
+// falling back to a fresh connection and re-running the command is safe;
+// true means the master may have already executed it remotely, and a blind
+// retry could repeat side effects.
+type MuxError struct {
+	Sent bool
+	Err  error
+}
+
+func (e *MuxError) Error() string { return e.Err.Error() }
+
+func (e *MuxError) Unwrap() error { return e.Err }
+
 // request is one mux client command. An empty Command means "handshake
 // probe": the server opens and closes a session to prove the connection.
 type request struct {
@@ -102,8 +116,20 @@ func (hb *Hub) TryDial(h domain.Host) usecase.RemoteClient {
 	if err != nil {
 		return nil
 	}
-	c := &muxClient{path: socketPath(dir, h)}
-	if _, err := c.Test(context.Background()); err != nil {
+	path := socketPath(dir, h)
+	if conn, derr := net.DialTimeout("unix", path, 500*time.Millisecond); derr != nil {
+		// Nothing is listening: the file is stale debris from a killed
+		// master. Remove it so the next Offer binds cleanly.
+		os.Remove(path)
+		return nil
+	} else {
+		conn.Close()
+	}
+	c := &muxClient{path: path}
+	probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := c.Test(probeCtx); err != nil {
+		c.Close()
 		return nil
 	}
 	return c
@@ -310,6 +336,7 @@ func (s *server) handle(conn net.Conn) {
 		res, err := s.rc.Test(ctx)
 		if err != nil {
 			writeErr(conn, resp, err)
+			s.hardFail(err)
 			return
 		}
 		resp.ExitCode = 0
@@ -322,9 +349,21 @@ func (s *server) handle(conn net.Conn) {
 	resp.Stdout, resp.Stderr, resp.ExitCode = res.Stdout, res.Stderr, res.ExitCode
 	if err != nil {
 		writeErr(conn, resp, err)
+		s.hardFail(err)
 		return
 	}
 	writeResp(conn, resp)
+}
+
+// hardFail tears the master down when the upstream client looks broken at
+// the connection level (dead SSH conn, network loss): without this, the
+// socket outlives a useless master and every subsequent exec pays the
+// probe delay. Auth or plain remote-exit failures do not tear down.
+func (s *server) hardFail(err error) {
+	switch domain.CodeOf(err) {
+	case domain.CodeConnectionFailed, domain.CodeTimeout, domain.CodeInternal:
+		s.ln.Close()
+	}
 }
 
 func writeErr(conn net.Conn, resp response, err error) {
@@ -350,7 +389,7 @@ type muxClient struct {
 func (c *muxClient) round(ctx context.Context, req request) (response, error) {
 	conn, err := net.DialTimeout("unix", c.path, 2*time.Second)
 	if err != nil {
-		return response{}, domain.Fail(domain.CodeConnectionFailed, "mux dial: "+err.Error())
+		return response{}, &MuxError{Sent: false, Err: fmt.Errorf("mux dial: %s", err.Error())}
 	}
 	defer conn.Close()
 	deadline, ok := ctx.Deadline()
@@ -363,15 +402,15 @@ func (c *muxClient) round(ctx context.Context, req request) (response, error) {
 		return response{}, domain.Fail(domain.CodeInternal, "mux encode: "+err.Error())
 	}
 	if _, err := conn.Write(append(b, '\n')); err != nil {
-		return response{}, domain.Fail(domain.CodeConnectionFailed, "mux write: "+err.Error())
+		return response{}, &MuxError{Sent: false, Err: fmt.Errorf("mux write: %s", err.Error())}
 	}
 	line, err := bufio.NewReaderSize(conn, 4<<20).ReadString('\n')
 	if err != nil {
-		return response{}, domain.Fail(domain.CodeConnectionFailed, "mux read: "+err.Error())
+		return response{}, &MuxError{Sent: true, Err: fmt.Errorf("mux read: %s", err.Error())}
 	}
 	var resp response
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		return response{}, domain.Fail(domain.CodeConnectionFailed, "mux decode: "+err.Error())
+		return response{}, &MuxError{Sent: true, Err: fmt.Errorf("mux decode: %s", err.Error())}
 	}
 	if resp.ErrorCode != "" {
 		return resp, domain.Fail(domain.Code(resp.ErrorCode), resp.ErrorMsg)

@@ -79,6 +79,9 @@ func TestAddThenDuplicateRejected(t *testing.T) {
 	if _, err := AddHost(store, sshInput("web1")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := AddHost(store, sshInput("db1")); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := AddHost(store, sshInput("web1")); err == nil {
 		t.Fatal("duplicate add must fail")
 	} else if domain.CodeOf(err) != domain.CodeHostExists {
@@ -87,6 +90,39 @@ func TestAddThenDuplicateRejected(t *testing.T) {
 	// Original entry untouched.
 	if store.hosts["web1"].Address != "10.0.0.1" {
 		t.Fatal("duplicate add clobbered the original")
+	}
+}
+
+func TestRenameHost(t *testing.T) {
+	store := &memStore{hosts: map[string]domain.Host{}}
+	if _, err := AddHost(store, sshInput("web1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddHost(store, sshInput("db1")); err != nil {
+		t.Fatal(err)
+	}
+	h, err := RenameHost(store, "web1", "web2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Name != "web2" || h.Address != "10.0.0.1" || h.User != "deploy" {
+		t.Fatalf("entry not preserved: %+v", h)
+	}
+	if _, ok := store.hosts["web1"]; ok {
+		t.Fatal("old entry survived")
+	}
+	if _, ok := store.hosts["web2"]; !ok {
+		t.Fatal("new entry missing")
+	}
+	for name, req := range map[string][2]string{
+		"missing-old": {"ghost", "web3"},
+		"duplicate":   {"web2", "db1"},
+		"same":        {"web2", "web2"},
+		"empty-new":   {"web2", "  "},
+	} {
+		if _, err := RenameHost(store, req[0], req[1]); err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
 	}
 }
 

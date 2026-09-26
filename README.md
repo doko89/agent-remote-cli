@@ -21,11 +21,16 @@ agent-remote add winrm w1 --host 10.0.0.5 --user admin --password-stdin < pw.txt
 # Kelola
 agent-remote list
 agent-remote show web1
+agent-remote rename web1 prod1     # pindah nama + secret keyring ikut
 agent-remote rm web1            # juga membersihkan secret keyring
 
 # Validasi tanpa efek samping, lalu eksekusi (separator `--` wajib)
 agent-remote test web1
 agent-remote exec web1 -- df -h /
+
+# Connection reuse ala ControlPersist (default aktif, idle 10m)
+agent-remote exec web1 -- uptime   # exec ke-2 dst. tanpa handshake ulang
+agent-remote --no-mux exec web1 -- uptime   # matikan reuse
 
 # Transfer file ala scp: [host:]path, polos = lokal
 agent-remote cp report.txt w1:C:/temp/

@@ -170,6 +170,37 @@ func RemoveHost(store HostStore, secrets SecretResolver, name string) error {
 	return nil
 }
 
+// RenameHost moves a stored host entry to a new name, preserving every
+// field except Name. Keyring secret migration is the CLI layer's job: the
+// use case stays store-only so it never touches secret plumbing.
+func RenameHost(store HostStore, from, to string) (domain.Host, error) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return domain.Host{}, domain.Fail(domain.CodeInvalidInput, "usage: rename <old> <new>")
+	}
+	if from == to {
+		return domain.Host{}, domain.Fail(domain.CodeInvalidInput, "new name equals current name")
+	}
+	hosts, err := store.Load()
+	if err != nil {
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
+	}
+	h, ok := hosts[from]
+	if !ok {
+		return domain.Host{}, domain.Fail(domain.CodeHostNotFound, "host "+from+" not found")
+	}
+	if _, exists := hosts[to]; exists {
+		return domain.Host{}, domain.Fail(domain.CodeHostExists, "host "+to+" already exists; remove it first or pick another name")
+	}
+	h.Name = to
+	hosts[to] = h
+	delete(hosts, from)
+	if err := store.Save(hosts); err != nil {
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, "cannot save host store: "+err.Error())
+	}
+	return h, nil
+}
+
 // ListHosts returns all hosts ordered by name. Store and presenter layers
 // must never attach secret values; the Host type cannot carry them.
 func ListHosts(store HostStore) ([]domain.Host, error) {

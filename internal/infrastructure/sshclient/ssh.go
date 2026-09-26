@@ -38,8 +38,17 @@ type Factory struct {
 // NewClient connects and authenticates. password is the key passphrase when
 // AuthRef points at a key file, otherwise the password credential.
 func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient, error) {
-	if c := f.Hub.TryDial(h); c != nil {
-		return c, nil
+	if mux := f.Hub.TryDial(h); mux != nil {
+		return &muxFallback{mux: mux, redial: func() (usecase.RemoteClient, error) {
+			conn, banner, err := dial(h, password, f.DialTimeout)
+			if err != nil {
+				return nil, err
+			}
+			if f.SpawnMaster != nil {
+				f.SpawnMaster(h)
+			}
+			return &client{conn: conn, banner: banner}, nil
+		}}, nil
 	}
 	conn, banner, err := dial(h, password, f.DialTimeout)
 	if err != nil {
@@ -51,6 +60,48 @@ func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient
 	}
 	return c, nil
 }
+
+// muxFallback wraps a mux client and recovers transparently when the master
+// dies before the command reaches it (dial/write failure): it re-dials a
+// fresh connection and runs the command there. Failures after the request
+// was sent are NOT retried — the remote may have already executed it, and
+// a retry could repeat side effects; those surface as connection errors.
+type muxFallback struct {
+	mux    usecase.RemoteClient
+	redial func() (usecase.RemoteClient, error)
+}
+
+func (m *muxFallback) Test(ctx context.Context) (domain.TestResult, error) {
+	res, err := m.mux.Test(ctx)
+	if err == nil {
+		return res, nil
+	}
+	fresh, derr := m.redial()
+	if derr != nil {
+		return domain.TestResult{}, err
+	}
+	defer fresh.Close()
+	return fresh.Test(ctx)
+}
+
+func (m *muxFallback) Exec(ctx context.Context, cmd string) (domain.ExecResult, error) {
+	res, err := m.mux.Exec(ctx, cmd)
+	if err == nil {
+		return res, nil
+	}
+	var me *sshmux.MuxError
+	if !errors.As(err, &me) || me.Sent {
+		return res, err
+	}
+	fresh, derr := m.redial()
+	if derr != nil {
+		return domain.ExecResult{}, err
+	}
+	defer fresh.Close()
+	return fresh.Exec(ctx, cmd)
+}
+
+func (m *muxFallback) Close() error { return m.mux.Close() }
 
 // NewRawClient dials and authenticates without any mux involvement. It
 // backs the detached mux serve child, which owns its connection for the

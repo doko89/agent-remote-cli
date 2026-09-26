@@ -28,6 +28,7 @@ agent-remote rm web1            # juga membersihkan secret keyring
 agent-remote test web1
 agent-remote exec web1 -- df -h /
 agent-remote exec web1 --login -- which bun   # bash -lic: PATH profil user aktif
+agent-remote exec web1 --sudo -- apt update    # pipe password ke sudo -S
 
 # Fan-out satu command ke banyak host (worker pool deterministik)
 agent-remote exec web1,web2 -- uptime

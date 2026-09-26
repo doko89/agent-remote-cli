@@ -149,7 +149,19 @@ func extractInterpreter(left []string) ([]string, string) {
 // script into the interpreter, appending any extra script arguments.
 func buildScriptCommand(content []byte, interpreter string, scriptArgs []string) string {
 	b64 := base64.StdEncoding.EncodeToString(content)
-	cmd := fmt.Sprintf("echo '%s' | base64 -d | %s", b64, interpreter)
+
+	// Shell-family interpreters need `-s` to read from stdin; `--` separates
+	// interpreter flags from script args. Other interpreters (python, node,
+	// ruby) use `-` for stdin and take args directly.
+	var stdinFlag string
+	switch interpreter {
+	case "bash", "sh", "zsh", "dash", "ksh":
+		stdinFlag = "-s --"
+	default:
+		stdinFlag = "-"
+	}
+
+	cmd := fmt.Sprintf("echo '%s' | base64 -d | %s %s", b64, interpreter, stdinFlag)
 	if len(scriptArgs) > 0 {
 		cmd += " " + strings.Join(scriptArgs, " ")
 	}

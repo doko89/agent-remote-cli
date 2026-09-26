@@ -45,11 +45,19 @@ func TestDetectInterpreter(t *testing.T) {
 func TestBuildScriptCommand(t *testing.T) {
 	content := []byte("echo hello")
 	cmd := buildScriptCommand(content, "bash", []string{"--verbose", "arg2"})
-	if !strings.Contains(cmd, "base64 -d | bash --verbose arg2") {
+	if !strings.Contains(cmd, "base64 -d | bash -s -- --verbose arg2") {
 		t.Fatalf("unexpected command: %s", cmd)
 	}
 	if !strings.Contains(cmd, "ZWNobyBoZWxsbw==") { // base64("echo hello")
 		t.Fatal("script content not base64-encoded in command")
+	}
+	pyCmd := buildScriptCommand([]byte("import sys"), "python3", []string{"arg1"})
+	if !strings.Contains(pyCmd, "python3 - arg1") {
+		t.Fatalf("unexpected python command: %s", pyCmd)
+	}
+	noArgs := buildScriptCommand(content, "sh", nil)
+	if !strings.Contains(noArgs, "sh -s --") {
+		t.Fatalf("unexpected no-args command: %s", noArgs)
 	}
 }
 

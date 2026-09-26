@@ -64,6 +64,9 @@ func runCp(args []string, opt Options, d Deps) Outcome {
 	}
 }
 
+// cpLoadStoreMsg prefixes store load failures during cp target resolution.
+const cpLoadStoreMsg = "cannot load host store: "
+
 // splitRef resolves one cp side into (hostName, path). Empty host means local.
 func splitRef(d Deps, arg string) (string, string, error) {
 	idx := strings.Index(arg, ":")
@@ -79,7 +82,7 @@ func splitRef(d Deps, arg string) (string, string, error) {
 	}
 	hosts, err := d.Store.Load()
 	if err != nil {
-		return "", "", domain.Fail(domain.CodeStoreError, "cannot load host store: "+err.Error())
+		return "", "", domain.Fail(domain.CodeStoreError, cpLoadStoreMsg+err.Error())
 	}
 	if _, ok := hosts[name]; !ok {
 		return "", "", domain.Fail(domain.CodeHostNotFound, fmt.Sprintf("host %s not found", name))

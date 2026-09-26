@@ -270,91 +270,126 @@ func runTest(args []string, opt Options, d Deps) Outcome {
 }
 
 func runExec(args []string, opt Options, d Deps) Outcome {
-	sep := -1
-	for i, a := range args {
-		if a == "--" {
-			sep = i
-			break
-		}
+	left, remote, ok := splitCommand(args)
+	if !ok {
+		return fail(domain.Fail(domain.CodeInvalidInput, execUsage))
 	}
-	if sep < 0 {
-		return fail(domain.Fail(domain.CodeInvalidInput,
-			"missing `--` separator: usage: exec <name[,name...]> | --group G | --all -- <command...>"))
-	}
-	left, remote := args[:sep], args[sep+1:]
 	if len(remote) == 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "remote command must not be empty"))
 	}
-	if len(left) == 0 {
-		return fail(domain.Fail(domain.CodeInvalidInput, "host must not be empty"))
+	exec, err := parseExecFlags(left, remote)
+	if err != nil {
+		return fail(err)
 	}
-	name, leftFlags := "", left
+	targets, err := resolveExecTargets(d.Store, exec)
+	if err != nil {
+		return fail(err)
+	}
+	if len(targets) != 1 || exec.targeting {
+		return runFanout(d, targets, exec.options(), exec.parallel, exec.failFast,
+			overrideSecrets(d, opt, exec.pwStdin, exec.pwEnv))
+	}
+	return runSingleExec(d, opt, targets[0].Name, exec)
+}
+
+const execUsage = "usage: exec <name[,name...]> | --group G | --all [--timeout 30s] [--parallel 4] [--fail-fast] [--no-filter] [--login] -- <command...>"
+
+// splitCommand splits args at the `--` separator into left (flags + host)
+// and right (remote command). Returns ok=false when `--` is missing.
+func splitCommand(args []string) (left, remote []string, ok bool) {
+	for i, a := range args {
+		if a != "--" {
+			continue
+		}
+		return args[:i], args[i+1:], true
+	}
+	return nil, nil, false
+}
+
+// execFlags carries the parsed `exec` flags and resolved targeting state.
+type execFlags struct {
+	name      string
+	timeout   time.Duration
+	noFilter  bool
+	group     string
+	all       bool
+	targeting bool
+	parallel  int
+	failFast  bool
+	pwStdin   bool
+	pwEnv     string
+	command   string
+}
+
+func (e execFlags) options() usecase.ExecOptions {
+	return usecase.ExecOptions{Command: e.command, Timeout: e.timeout, NoFilter: e.noFilter}
+}
+
+func parseExecFlags(left, remote []string) (execFlags, error) {
+	var e execFlags
+	if len(left) == 0 {
+		return e, domain.Fail(domain.CodeInvalidInput, "host must not be empty")
+	}
+	leftFlags := left
 	if !strings.HasPrefix(left[0], "-") {
-		name, leftFlags = left[0], left[1:]
+		e.name, leftFlags = left[0], left[1:]
 	}
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	timeout := fs.Duration("timeout", 30*time.Second, "")
-	noFilter := fs.Bool("no-filter", false, "")
+	fs.DurationVar(&e.timeout, "timeout", 30*time.Second, "")
+	fs.BoolVar(&e.noFilter, "no-filter", false, "")
 	login := fs.Bool("login", false, "")
-	group := fs.String("group", "", "")
-	all := fs.Bool("all", false, "")
-	parallel := fs.Int("parallel", 4, "")
-	failFast := fs.Bool("fail-fast", false, "")
-	pwStdin := fs.Bool("password-stdin", false, "")
-	pwEnv := fs.String("password-env", "", "")
+	fs.StringVar(&e.group, "group", "", "")
+	fs.BoolVar(&e.all, "all", false, "")
+	fs.IntVar(&e.parallel, "parallel", 4, "")
+	fs.BoolVar(&e.failFast, "fail-fast", false, "")
+	fs.BoolVar(&e.pwStdin, "password-stdin", false, "")
+	fs.StringVar(&e.pwEnv, "password-env", "", "")
 	if err := fs.Parse(leftFlags); err != nil || len(fs.Args()) != 0 {
-		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: exec <name[,name...]> | --group G | --all -- <command...>"))
+		return e, domain.Fail(domain.CodeInvalidInput, execUsage)
 	}
-	if *timeout <= 0 {
-		return fail(domain.Fail(domain.CodeInvalidInput, "timeout must be positive"))
+	if e.timeout <= 0 {
+		return e, domain.Fail(domain.CodeInvalidInput, "timeout must be positive")
 	}
-	command := strings.Join(remote, " ")
+	if e.parallel < 1 || e.parallel > 64 {
+		return e, domain.Fail(domain.CodeInvalidInput, "parallel must be between 1 and 64")
+	}
+	e.targeting = e.group != "" || e.all
+	if e.targeting && e.name != "" {
+		return e, domain.Fail(domain.CodeInvalidInput,
+			"usage: target either <name[,name...]> or --group GROUP or --all, not both")
+	}
+	e.command = strings.Join(remote, " ")
 	if *login {
-		command = loginWrap(command)
+		e.command = loginWrap(e.command)
 	}
-	targeting := *group != "" || *all
-	if targeting && name != "" {
-		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: target either <name[,name...]> or --group GROUP or --all, not both"))
-	}
-	if *parallel < 1 || *parallel > 64 {
-		return fail(domain.Fail(domain.CodeInvalidInput, "parallel must be between 1 and 64"))
-	}
-	var targets []domain.Host
-	var err error
+	return e, nil
+}
+
+func resolveExecTargets(store usecase.HostStore, e execFlags) ([]domain.Host, error) {
 	var names []string
-	for _, n := range strings.Split(name, ",") {
+	for _, n := range strings.Split(e.name, ",") {
 		if n = strings.TrimSpace(n); n != "" {
 			names = append(names, n)
 		}
 	}
-	if targeting || len(names) > 1 {
-		targets, err = usecase.ResolveTargets(d.Store, names, *group, *all)
-		if err != nil {
-			return fail(err)
-		}
-	} else {
-		if len(names) == 0 {
-			return fail(domain.Fail(domain.CodeInvalidInput, "host must not be empty"))
-		}
-		targets, err = usecase.ResolveTargets(d.Store, names, "", false)
-		if err != nil {
-			return fail(err)
-		}
+	if e.targeting || len(names) > 1 {
+		return usecase.ResolveTargets(store, names, e.group, e.all)
 	}
-	if len(targets) != 1 || targeting {
-		return runFanout(d, targets, usecase.ExecOptions{Command: command, Timeout: *timeout, NoFilter: *noFilter}, *parallel, *failFast, overrideSecrets(d, opt, *pwStdin, *pwEnv))
+	if len(names) == 0 {
+		return nil, domain.Fail(domain.CodeInvalidInput, "host must not be empty")
 	}
-	name = targets[0].Name
-	h, res, err := usecase.Exec(context.Background(), d.Store, overrideSecrets(d, opt, *pwStdin, *pwEnv), d.Factory, name,
-		usecase.ExecOptions{Command: command, Timeout: *timeout, NoFilter: *noFilter})
+	return usecase.ResolveTargets(store, names, "", false)
+}
+
+func runSingleExec(d Deps, opt Options, name string, e execFlags) Outcome {
+	h, res, err := usecase.Exec(context.Background(), d.Store,
+		overrideSecrets(d, opt, e.pwStdin, e.pwEnv), d.Factory, name, e.options())
 	if err != nil {
 		return fail(err)
 	}
 	view := presenter.ExecView{
-		Host: h.Name, Command: command,
+		Host: h.Name, Command: e.command,
 		Stdout: res.Stdout, Stderr: res.Stderr, ExitCode: res.ExitCode,
 		DurationMs: res.DurationMs, Filtered: res.Filtered,
 		DroppedLines: res.DroppedLines, PreAuthBanner: res.PreAuthBanner,
@@ -366,7 +401,9 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 // result list. Exit code aggregation: any tool-level failure (connect,
 // auth, timeout) wins with 2; otherwise any non-zero remote exit yields 1.
 func runFanout(d Deps, targets []domain.Host, opt usecase.ExecOptions, parallel int, failFast bool, secrets usecase.SecretResolver) Outcome {
-	results := usecase.ExecFanout(context.Background(), d.Store, secrets, d.Factory, targets, opt, parallel, failFast)
+	results := usecase.ExecFanout(context.Background(),
+		usecase.FanoutDeps{Store: d.Store, Secrets: secrets, Factory: d.Factory},
+		targets, opt, parallel, failFast)
 	views := make([]presenter.ExecView, 0, len(results))
 	raws := make([]string, 0, len(results))
 	worst := 0

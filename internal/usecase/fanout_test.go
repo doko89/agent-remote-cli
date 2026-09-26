@@ -128,7 +128,7 @@ func TestExecFanoutAggregatesAndLimits(t *testing.T) {
 	factory.client(hosts[1]).result = domain.ExecResult{ExitCode: 1}
 	factory.client(hosts[2]).result = domain.ExecResult{Stdout: "ok"}
 
-	results := ExecFanout(context.Background(), store, stubSecrets{}, factory, hosts,
+	results := ExecFanout(context.Background(), FanoutDeps{Store: store, Secrets: stubSecrets{}, Factory: factory}, hosts,
 		ExecOptions{Command: "uptime", Timeout: time.Second}, 2, false)
 	if len(results) != 3 {
 		t.Fatalf("result count: %d", len(results))
@@ -156,7 +156,7 @@ func TestExecFanoutFailFastSkipsPending(t *testing.T) {
 	factory := newFanoutFactory()
 	factory.client(hosts[0]).err = errors.New("boom")
 
-	results := ExecFanout(context.Background(), store, stubSecrets{}, factory, hosts,
+	results := ExecFanout(context.Background(), FanoutDeps{Store: store, Secrets: stubSecrets{}, Factory: factory}, hosts,
 		ExecOptions{Command: "uptime", Timeout: time.Second}, 1, true)
 	if results[0].Err == nil {
 		t.Fatal("expected first host error")

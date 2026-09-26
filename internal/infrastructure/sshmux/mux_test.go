@@ -76,8 +76,7 @@ func TestMuxTTLExpiry(t *testing.T) {
 	t.Setenv("AGENT_REMOTE_CONFIG", filepath.Join(t.TempDir(), "hosts.json"))
 	hub := NewHub()
 	runner := &stubRunner{}
-	ttl := 400 * time.Millisecond
-	if err := hub.Offer(muxHost("ttl"), runner, "", ttl); err != nil {
+	if err := hub.Offer(muxHost("ttl"), runner, "", 400*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if c := hub.TryDial(muxHost("ttl")); c == nil {
@@ -144,8 +143,7 @@ func TestMuxStaleSocketRemovedOnTryDial(t *testing.T) {
 	if hub.TryDial(muxHost("dead")) != nil {
 		t.Fatal("TryDial must return nil for a dead socket")
 	}
-	_, statErr := os.Stat(path)
-	if !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		t.Fatal("stale socket file must be removed")
 	}
 }

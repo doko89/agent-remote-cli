@@ -86,6 +86,7 @@ func (t *rawNTLM) httpClient() (*http.Client, *http.Transport) {
 // mirroring the library's error shape (status code in the message) so error
 // classification keeps working.
 func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
+	ctx := t.requestContext()
 	httpClient, transport := t.httpClient()
 	defer transport.CloseIdleConnections()
 	payload := msg.String()
@@ -111,12 +112,12 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	// response carries the Type2 challenge. Bodies are drained before
 	// close: NTLM is connection-bound, so every leg must reuse the same
 	// TCP connection and Go only reuses fully-consumed ones.
-	anon, err := t.round(httpClient, payload, "")
+	anon, err := t.round(ctx, httpClient, payload, "")
 	if err != nil {
 		return "", err
 	}
 	drain(anon)
-	challenge, err := t.round(httpClient, payload, authScheme+base64.StdEncoding.EncodeToString(type1))
+	challenge, err := t.round(ctx, httpClient, payload, authScheme+base64.StdEncoding.EncodeToString(type1))
 	if err != nil {
 		return "", err
 	}
@@ -140,7 +141,7 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ntlm seal: %w", err)
 	}
-	final, err := t.roundSealed(httpClient, sealed, authScheme+base64.StdEncoding.EncodeToString(type3))
+	final, err := t.roundSealed(ctx, httpClient, sealed, authScheme+base64.StdEncoding.EncodeToString(type3))
 	if err != nil {
 		return "", err
 	}
@@ -173,6 +174,9 @@ const headerContentType = "Content-Type"
 
 const mimeBoundary = "--Encrypted Boundary"
 
+// octetStreamHeader is the MIME content type for the encrypted payload.
+const octetStreamHeader = "\tContent-Type: application/octet-stream\r\n"
+
 // sealMessage wraps the SOAP payload in the encrypted multipart envelope.
 func sealMessage(nc *bodgitntlm.Client, payload string) ([]byte, error) {
 	sess := nc.SecuritySession()
@@ -186,13 +190,13 @@ func sealMessage(nc *bodgitntlm.Client, payload string) ([]byte, error) {
 	stream := append(u32le(len(signature)), signature...)
 	stream = append(stream, sealed...)
 	return []byte(fmt.Sprintf(
-		"%s\r\n\tContent-Type: %s\r\n\tOriginalContent: type=application/soap+xml;charset=UTF-8;Length=%d\r\n%s\r\n\tContent-Type: application/octet-stream\r\n%s%s--\r\n",
-		mimeBoundary, protocolString, len(payload), mimeBoundary, stream, mimeBoundary)), nil
+		"%s\r\n\tContent-Type: %s\r\n\tOriginalContent: type=application/soap+xml;charset=UTF-8;Length=%d\r\n%s\r\n%s%s%s--\r\n",
+		mimeBoundary, protocolString, len(payload), mimeBoundary, octetStreamHeader, stream, mimeBoundary)), nil
 }
 
 // roundSealed POSTs a sealed envelope with the encrypted content type.
-func (t *rawNTLM) roundSealed(hc *http.Client, sealed []byte, auth string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, bytes.NewReader(sealed))
+func (t *rawNTLM) roundSealed(ctx context.Context, hc *http.Client, sealed []byte, auth string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(sealed))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
@@ -217,7 +221,7 @@ func unsealResponse(nc *bodgitntlm.Client, res *http.Response) (string, error) {
 	if res.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("http error %d: encrypted response failed", res.StatusCode)
 	}
-	marker := []byte("\tContent-Type: application/octet-stream\r\n")
+	marker := []byte(octetStreamHeader)
 	start := bytes.Index(raw, marker)
 	if start < 0 {
 		return "", fmt.Errorf("no sealed stream in response")
@@ -284,8 +288,8 @@ func u32le(n int) []byte {
 // round POSTs payload with an optional Authorization header, returning the
 // response for the caller to consume. A 401 without credentials is the
 // expected handshake step, not an error.
-func (t *rawNTLM) round(hc *http.Client, payload, auth string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, strings.NewReader(payload))
+func (t *rawNTLM) round(ctx context.Context, hc *http.Client, payload, auth string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", t.url, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}

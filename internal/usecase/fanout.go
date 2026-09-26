@@ -9,6 +9,15 @@ import (
 	"agent-remote/internal/domain"
 )
 
+// FanoutDeps bundles the shared ports passed to every worker in a fan-out.
+// Grouping them keeps ExecFanout within Sonar's parameter limit and makes
+// call sites self-documenting.
+type FanoutDeps struct {
+	Store   HostStore
+	Secrets SecretResolver
+	Factory NewClienter
+}
+
 // ResolveTargets maps one exec targeting mode to concrete hosts: explicit
 // comma-separated names, a group label, or every stored host. It preserves
 // name-list order and sorts group/all results by name for determinism.
@@ -17,45 +26,61 @@ func ResolveTargets(store HostStore, names []string, group string, all bool) ([]
 	if err != nil {
 		return nil, domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
-	switch {
-	case all:
-		out := make([]domain.Host, 0, len(hosts))
-		for _, h := range hosts {
-			out = append(out, h)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-		if len(out) == 0 {
-			return nil, domain.Fail(domain.CodeInvalidInput, "no hosts configured")
-		}
-		return out, nil
-	case group != "":
-		var out []domain.Host
-		for _, h := range hosts {
-			if h.Group == group {
-				out = append(out, h)
-			}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-		if len(out) == 0 {
-			return nil, domain.Fail(domain.CodeInvalidInput, "no hosts in group "+group)
-		}
-		return out, nil
-	default:
-		out := make([]domain.Host, 0, len(names))
-		var missing []string
-		for _, n := range names {
-			h, ok := hosts[n]
-			if !ok {
-				missing = append(missing, n)
-				continue
-			}
-			out = append(out, h)
-		}
-		if len(missing) > 0 {
-			return nil, hostNotFound(fmt.Sprintf("%v", missing))
-		}
-		return out, nil
+	if all {
+		return resolveAll(hosts)
 	}
+	if group != "" {
+		return resolveGroup(hosts, group)
+	}
+	return resolveNames(hosts, names)
+}
+
+func resolveAll(hosts map[string]domain.Host) ([]domain.Host, error) {
+	out := sortedHosts(hosts)
+	if len(out) == 0 {
+		return nil, domain.Fail(domain.CodeInvalidInput, "no hosts configured")
+	}
+	return out, nil
+}
+
+func resolveGroup(hosts map[string]domain.Host, group string) ([]domain.Host, error) {
+	filtered := make(map[string]domain.Host)
+	for name, h := range hosts {
+		if h.Group == group {
+			filtered[name] = h
+		}
+	}
+	out := sortedHosts(filtered)
+	if len(out) == 0 {
+		return nil, domain.Fail(domain.CodeInvalidInput, "no hosts in group "+group)
+	}
+	return out, nil
+}
+
+func resolveNames(hosts map[string]domain.Host, names []string) ([]domain.Host, error) {
+	out := make([]domain.Host, 0, len(names))
+	var missing []string
+	for _, n := range names {
+		h, ok := hosts[n]
+		if !ok {
+			missing = append(missing, n)
+			continue
+		}
+		out = append(out, h)
+	}
+	if len(missing) > 0 {
+		return nil, hostNotFound(fmt.Sprintf("%v", missing))
+	}
+	return out, nil
+}
+
+func sortedHosts(hosts map[string]domain.Host) []domain.Host {
+	out := make([]domain.Host, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, h)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // FanoutResult is one host's outcome in a multi-target exec: exactly one of
@@ -69,7 +94,7 @@ type FanoutResult struct {
 // ExecFanout runs the same command on every target with a bounded worker
 // pool, collecting one result per host. With failFast, the first failed
 // host cancels scheduling of the remaining ones (in-flight hosts finish).
-func ExecFanout(ctx context.Context, store HostStore, secrets SecretResolver, factory NewClienter, targets []domain.Host, opt ExecOptions, parallel int, failFast bool) []FanoutResult {
+func ExecFanout(ctx context.Context, deps FanoutDeps, targets []domain.Host, opt ExecOptions, parallel int, failFast bool) []FanoutResult {
 	if parallel <= 0 {
 		parallel = defaultConcurrency
 	}
@@ -97,7 +122,7 @@ func ExecFanout(ctx context.Context, store HostStore, secrets SecretResolver, fa
 		go func(i int, h domain.Host) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, res, err := Exec(ctx, store, secrets, factory, h.Name, opt)
+			_, res, err := Exec(ctx, deps.Store, deps.Secrets, deps.Factory, h.Name, opt)
 			results[i] = FanoutResult{Host: h.Name, Res: res, Err: err}
 			if err != nil && failFast {
 				cancel()

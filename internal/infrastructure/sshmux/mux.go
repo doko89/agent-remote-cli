@@ -21,19 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"syscall"
-
 	"agent-remote/internal/domain"
 	"agent-remote/internal/usecase"
 )
-
-// detached builds SysProcAttr for a background child that survives its
-// parent (own session; Setsid alone — combining it with Setpgid makes
-// setsid fail with EPERM because setpgid already made the child a group
-// leader).
-func detached() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{Setsid: true}
-}
 
 // Environment variables driving a detached serve child. The child re-dials
 // the host itself, owns the mux socket, and exits after the idle TTL.

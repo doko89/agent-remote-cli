@@ -81,7 +81,7 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 // sudoWrap pipes the password into `sudo -S` so non-interactive sessions
 // can run privileged commands. The `-p ”` suppresses the password prompt
 // output; the command is single-quote-escaped for safe inline execution.
-func sudoWrap(cmd string, password string) string {
+func sudoWrap(cmd, password string) string {
 	escaped := strings.ReplaceAll(cmd, "'", `'\''`)
 	return fmt.Sprintf("echo '%s' | sudo -S -p '' bash -c '%s'", password, escaped)
 }

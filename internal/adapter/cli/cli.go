@@ -91,6 +91,8 @@ func dispatch(cmd string, rest []string, opt Options, d Deps) Outcome {
 		return runRm(rest, opt, d)
 	case "rename":
 		return runRename(rest, opt, d)
+	case "group":
+		return runGroup(rest, d)
 	case "list":
 		return runList(rest, d)
 	case "show":

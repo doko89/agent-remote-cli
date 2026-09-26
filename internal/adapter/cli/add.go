@@ -200,6 +200,8 @@ COMMANDS
   add winrm <name> [options]   register a new WinRM host
   rm <name>                    remove a host and its stored secret
   rename <old> <new>           rename a host (moves its stored secret)
+  group <list|rename|move|remove>
+                               manage fan-out target groups
   list                         list hosts (never shows secrets)
   show <name>                  show one host (never shows secrets)
   test <name> [--timeout 30s]  handshake-only connectivity check

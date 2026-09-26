@@ -34,6 +34,12 @@ agent-remote exec web1,web2 -- uptime
 agent-remote exec --group web --parallel 8 -- df -h /
 agent-remote exec --all --parallel 8 --fail-fast -- systemctl is-active app
 
+# Kelola group tanpa rm + add ulang
+agent-remote group list
+agent-remote group rename web staging
+agent-remote group move web1 prod       # pindah 1 host
+agent-remote group remove staging       # hapus group, host tetap ada
+
 # Connection reuse ala ControlPersist (default aktif, idle 10m)
 agent-remote exec web1 -- uptime   # exec ke-2 dst. tanpa handshake ulang
 agent-remote --no-mux exec web1 -- uptime   # matikan reuse

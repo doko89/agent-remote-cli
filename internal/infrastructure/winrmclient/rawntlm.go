@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	bodgitntlm "github.com/bodgit/ntlmssp"
@@ -32,13 +33,22 @@ import (
 type rawNTLM struct {
 	user     string
 	password string
-	ctx      context.Context
+	ctx      atomic.Pointer[context.Context]
 
 	url         string
 	dialTimeout time.Duration
 	insecure    bool
 	http        *http.Client // fresh per Post, see httpClient
 	transport   *http.Transport
+}
+
+func (t *rawNTLM) setContext(ctx context.Context) { t.ctx.Store(&ctx) }
+
+func (t *rawNTLM) requestContext() context.Context {
+	if p := t.ctx.Load(); p != nil {
+		return *p
+	}
+	return context.Background()
 }
 
 func (t *rawNTLM) Transport(ep *winrm.Endpoint) error {
@@ -193,7 +203,7 @@ func sealMessage(nc *bodgitntlm.Client, payload string) ([]byte, error) {
 
 // roundSealed POSTs a sealed envelope with the encrypted content type.
 func (t *rawNTLM) roundSealed(sealed []byte, auth string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(t.ctx, "POST", t.url, bytes.NewReader(sealed))
+	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, bytes.NewReader(sealed))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
@@ -286,7 +296,7 @@ func u32le(n int) []byte {
 // response for the caller to consume. A 401 without credentials is the
 // expected handshake step, not an error.
 func (t *rawNTLM) round(payload, auth string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(t.ctx, "POST", t.url, strings.NewReader(payload))
+	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}

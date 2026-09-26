@@ -193,33 +193,24 @@ func TestLiveWinRM(t *testing.T) {
 	}
 }
 
-// TestRotateClientClosesIdleConnections verifies that calling rotateClient
-// closes the previous transport's idle connections, preventing fd leaks
-// across hundreds of Post cycles during large file transfers.
-func TestRotateClientClosesIdleConnections(t *testing.T) {
+// TestPostCreatesFreshTransport verifies that each Post call creates a new
+// HTTP transport (not shared state), preventing fd leaks and enabling safe
+// concurrent calls during parallel file transfers.
+func TestPostCreatesFreshTransport(t *testing.T) {
 	tr := &rawNTLM{dialTimeout: 15 * time.Second}
 
-	// First rotation creates the initial client.
-	tr.rotateClient()
-	if tr.http == nil || tr.transport == nil {
-		t.Fatal("rotateClient must populate http and transport")
+	client1, transport1 := tr.httpClient()
+	if client1 == nil || transport1 == nil {
+		t.Fatal("httpClient must return non-nil client and transport")
 	}
 
-	// Simulate an idle connection by putting one in the transport's pool.
-	// We cannot easily inject a real TCP connection into the pool, so we
-	// verify the mechanism: after rotation, the old transport is replaced.
-	oldTransport := tr.transport
-	tr.rotateClient()
-	if tr.transport == oldTransport {
-		t.Fatal("rotateClient must create a new transport")
-	}
-	if tr.transport == nil {
-		t.Fatal("new transport must not be nil")
+	_, transport2 := tr.httpClient()
+	if transport1 == transport2 {
+		t.Fatal("each httpClient call must create a new transport (thread-safety)")
 	}
 
-	// The old transport's idle connections are closed by CloseIdleConnections.
-	// We verify by checking the old transport has no active clients referencing it.
-	_ = oldTransport // no panic; CloseIdleConnections was called in rotateClient
+	transport1.CloseIdleConnections()
+	transport2.CloseIdleConnections()
 }
 
 // TestChallengeBodyDrained verifies that the challenge response body is

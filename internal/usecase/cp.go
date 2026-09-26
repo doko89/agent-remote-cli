@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"agent-remote/internal/domain"
@@ -14,6 +16,9 @@ import (
 type CopyOptions struct {
 	Recursive bool
 	Timeout   time.Duration
+	// Concurrency bounds parallel file transfers in directory copies.
+	// 0 or negative means use defaultConcurrency.
+	Concurrency int
 }
 
 // CopyRequest is one `cp` invocation: both endpoints plus options.
@@ -29,6 +34,18 @@ const dirNeedsFlag = "source is a directory; pass -r for recursive copy"
 // timedOut reports a copy stopped by its deadline.
 const timedOut = "copy timed out"
 
+// defaultConcurrency is the number of files transferred in parallel when
+// Concurrency is not set.
+const defaultConcurrency = 4
+
+// concurrencyOr computes the effective worker count.
+func concurrencyOr(n int) int {
+	if n <= 0 {
+		return defaultConcurrency
+	}
+	return n
+}
+
 // CopyResult counts what one `cp` moved.
 type CopyResult struct {
 	Files      int64
@@ -36,8 +53,8 @@ type CopyResult struct {
 	DurationMs int64
 }
 
-func (r *CopyResult) addBytes(n int64) { r.Bytes += n }
-func (r *CopyResult) addFile()         { r.Files++ }
+func (r *CopyResult) addBytes(n int64) { atomic.AddInt64(&r.Bytes, n) }
+func (r *CopyResult) addFile()         { atomic.AddInt64(&r.Files, 1) }
 
 // Copy moves one file or tree between local and remote sides. Either side is
 // local when its host name is empty. Remote-to-remote always routes through
@@ -73,7 +90,7 @@ func Copy(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	defer cancel()
 
 	start := time.Now()
-	c, err := newCopier(callCtx, secrets, factory, src, dst)
+	c, err := newCopier(callCtx, secrets, factory, src, dst, concurrencyOr(req.Opt.Concurrency))
 	if err != nil {
 		return res, err
 	}
@@ -98,11 +115,12 @@ func resolveSide(hosts map[string]domain.Host, name string) (*domain.Host, error
 
 // copier holds the open transfer clients for one Copy call.
 type copier struct {
-	clients map[string]TransferClient
+	clients     map[string]TransferClient
+	concurrency int
 }
 
-func newCopier(ctx context.Context, secrets SecretResolver, factory NewTransferClienter, src, dst *domain.Host) (*copier, error) {
-	c := &copier{clients: map[string]TransferClient{}}
+func newCopier(ctx context.Context, secrets SecretResolver, factory NewTransferClienter, src, dst *domain.Host, concurrency int) (*copier, error) {
+	c := &copier{clients: map[string]TransferClient{}, concurrency: concurrencyOr(concurrency)}
 	for _, h := range []*domain.Host{src, dst} {
 		if h == nil {
 			continue
@@ -198,8 +216,20 @@ func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstD
 	if err != nil {
 		return domain.Fail(domain.CodeInvalidInput, "cannot list local directory: "+err.Error())
 	}
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	setErr := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	sem := make(chan struct{}, c.concurrency)
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
+			wg.Wait()
 			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		lp := filepath.Join(localDir, e.Name())
@@ -210,11 +240,26 @@ func (c *copier) uploadDir(ctx context.Context, d TransferClient, localDir, dstD
 			}
 			continue
 		}
-		if err := c.uploadFile(ctx, d, lp, dst, res); err != nil {
-			return err
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
+		wg.Add(1)
+		go func(lp, dst string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := c.uploadFile(ctx, d, lp, dst, res); err != nil {
+				setErr(err)
+			}
+		}(lp, dst)
 	}
-	return nil
+	wg.Wait()
+	if ctx.Err() != nil {
+		return domain.Fail(domain.CodeTimeout, timedOut)
+	}
+	return firstErr
 }
 
 // download copies a remote file or tree to a local destination.
@@ -253,8 +298,20 @@ func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, loca
 	if err != nil {
 		return err
 	}
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	setErr := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	sem := make(chan struct{}, c.concurrency)
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
+			wg.Wait()
 			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
 		lp := filepath.Join(localDir, remoteBase(e.Path))
@@ -264,11 +321,26 @@ func (c *copier) downloadDir(ctx context.Context, s TransferClient, srcDir, loca
 			}
 			continue
 		}
-		if err := c.downloadFile(ctx, s, e.Path, lp, res); err != nil {
-			return err
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return domain.Fail(domain.CodeTimeout, timedOut)
 		}
+		wg.Add(1)
+		go func(rp, lp string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := c.downloadFile(ctx, s, rp, lp, res); err != nil {
+				setErr(err)
+			}
+		}(e.Path, lp)
 	}
-	return nil
+	wg.Wait()
+	if ctx.Err() != nil {
+		return domain.Fail(domain.CodeTimeout, timedOut)
+	}
+	return firstErr
 }
 
 // relay routes remote-to-remote through local staging. The download phase

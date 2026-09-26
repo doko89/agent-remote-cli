@@ -25,6 +25,7 @@ func runCp(args []string, opt Options, d Deps) Outcome {
 	recursive := fs.Bool("r", false, "")
 	fs.BoolVar(recursive, "recursive", false, "")
 	timeout := fs.Duration("timeout", 10*time.Minute, "")
+	parallel := fs.Int("parallel", 4, "parallel file transfers for directory copies")
 	pwStdin := fs.Bool("password-stdin", false, "")
 	pwEnv := fs.String("password-env", "", "")
 	if err := fs.Parse(args); err != nil || len(fs.Args()) != 2 {
@@ -32,6 +33,9 @@ func runCp(args []string, opt Options, d Deps) Outcome {
 	}
 	if *timeout <= 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "timeout must be positive"))
+	}
+	if *parallel < 1 || *parallel > 64 {
+		return fail(domain.Fail(domain.CodeInvalidInput, "parallel must be between 1 and 64"))
 	}
 	pos := fs.Args()
 	srcHost, srcPath, err := splitRef(d, pos[0])
@@ -45,7 +49,7 @@ func runCp(args []string, opt Options, d Deps) Outcome {
 	res, err := usecase.Copy(context.Background(), d.Store, overrideSecrets(d, opt, *pwStdin, *pwEnv), d.TFactory,
 		usecase.CopyRequest{
 			SrcHost: srcHost, SrcPath: srcPath, DstHost: dstHost, DstPath: dstPath,
-			Opt: usecase.CopyOptions{Recursive: *recursive, Timeout: *timeout},
+			Opt: usecase.CopyOptions{Recursive: *recursive, Timeout: *timeout, Concurrency: *parallel},
 		})
 	if err != nil {
 		return fail(err)
@@ -84,7 +88,7 @@ func splitRef(d Deps, arg string) (string, string, error) {
 }
 
 func cpUsage() string {
-	return `usage: cp [-r] [--timeout 10m] [--password-stdin | --password-env VAR] <src> <dest>
+	return `usage: cp [-r] [--timeout 10m] [--parallel 4] [--password-stdin | --password-env VAR] <src> <dest>
 
   Each side is [host:]path: a host: prefix names a registered host,
   a bare path is local. Examples:
@@ -93,5 +97,6 @@ func cpUsage() string {
     cp -r ./dist web1:/opt/app         recursive upload to SSH host
     cp web1:/var/log/app.log w45:C:/t/ remote-to-remote (via local temp)
 
-  -r  copy directories recursively (required for directory sources)`
+  -r  copy directories recursively (required for directory sources)
+  --parallel N  concurrent file transfers for -r (default 4, max 64)`
 }

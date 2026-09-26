@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"agent-remote/internal/domain"
@@ -23,6 +24,9 @@ type SyncOptions struct {
 	Timeout time.Duration
 	// OnEvent receives every applied action; nil disables the stream.
 	OnEvent func(SyncEvent)
+	// Concurrency bounds parallel file transfers in directory scans.
+	// 0 or negative means use defaultConcurrency.
+	Concurrency int
 }
 
 // SyncEvent is one applied sync action, streamed in watch mode.
@@ -41,8 +45,9 @@ type SyncResult struct {
 	DurationMs int64
 }
 
-func (r *SyncResult) addBytes(n int64) { r.Bytes += n }
-func (r *SyncResult) addFile()         { r.Files++ }
+func (r *SyncResult) addBytes(n int64) { atomic.AddInt64(&r.Bytes, n) }
+func (r *SyncResult) addFile()         { atomic.AddInt64(&r.Files, 1) }
+func (r *SyncResult) addDeleted()      { atomic.AddInt64(&r.Deleted, 1) }
 
 // SyncRequest is one `sync` invocation: endpoints plus mode.
 type SyncRequest struct {
@@ -158,7 +163,7 @@ func newSyncer(ctx context.Context, store HostStore, secrets SecretResolver, fac
 	if err != nil {
 		return nil, err
 	}
-	c, err := newCopier(ctx, secrets, factory, srcHost, dstHost)
+	c, err := newCopier(ctx, secrets, factory, srcHost, dstHost, req.Opt.Concurrency)
 	if err != nil {
 		return nil, err
 	}

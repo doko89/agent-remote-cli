@@ -31,6 +31,7 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 	fs.BoolVar(watch, "watch", false, "")
 	interval := fs.Duration("interval", 5*time.Second, "")
 	timeout := fs.Duration("timeout", 10*time.Minute, "")
+	parallel := fs.Int("parallel", 4, "parallel file transfers for directory scans")
 	pwStdin := fs.Bool("password-stdin", false, "")
 	pwEnv := fs.String("password-env", "", "")
 	if err := fs.Parse(args); err != nil || len(fs.Args()) != 2 {
@@ -41,6 +42,9 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 	}
 	if *timeout <= 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "timeout must be positive"))
+	}
+	if *parallel < 1 || *parallel > 64 {
+		return fail(domain.Fail(domain.CodeInvalidInput, "parallel must be between 1 and 64"))
 	}
 	if *watch && *interval <= 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "interval must be positive"))
@@ -60,7 +64,7 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 	}
 	req := usecase.SyncRequest{
 		SrcHost: srcHost, SrcPath: srcPath, DstHost: dstHost, DstPath: dstPath,
-		Opt: usecase.SyncOptions{Delete: *del, Timeout: *timeout},
+		Opt: usecase.SyncOptions{Delete: *del, Timeout: *timeout, Concurrency: *parallel},
 	}
 	secrets := overrideSecrets(d, opt, *pwStdin, *pwEnv)
 	if !*watch {
@@ -109,7 +113,7 @@ func syncOutcome(pos []string, mode string, res usecase.SyncResult) Outcome {
 }
 
 func syncUsage() string {
-	return `usage: sync [--delete | --half] [-w] [--interval 5s] [--timeout 10m] <src> <dest>
+	return `usage: sync [--delete | --half] [-w] [--interval 5s] [--timeout 10m] [--parallel 4] <src> <dest>
 
   One-way mirror src onto dest (new + changed files copy over).
   Sides share cp's [host:]path syntax.
@@ -118,5 +122,6 @@ func syncUsage() string {
   --delete   everything mode: also delete dest files missing on src
   -w, --watch
              keep running until interrupted; rescan every --interval and
-             stream one JSON object per applied action`
+             stream one JSON object per applied action
+  --parallel N  concurrent file transfers per scan (default 4, max 64)`
 }

@@ -38,8 +38,6 @@ type rawNTLM struct {
 	url         string
 	dialTimeout time.Duration
 	insecure    bool
-	http        *http.Client // fresh per Post, see httpClient
-	transport   *http.Transport
 }
 
 func (t *rawNTLM) setContext(ctx context.Context) { t.ctx.Store(&ctx) }
@@ -69,36 +67,27 @@ func (t *rawNTLM) Transport(ep *winrm.Endpoint) error {
 // clean connection; reusing an already-authenticated connection for a new
 // handshake confuses picky servers (empty 500s). Between Posts, rotateClient
 // closes idle connections so hundreds of chunks do not leak file descriptors.
-func (t *rawNTLM) httpClient() *http.Client {
+func (t *rawNTLM) httpClient() (*http.Client, *http.Transport) {
 	dialer := &net.Dialer{Timeout: t.dialTimeout, KeepAlive: 30 * time.Second}
-	t.transport = &http.Transport{
+	transport := &http.Transport{
 		DialContext:           dialer.DialContext,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: t.insecure}, //nolint:gosec // opt-in via --insecure
 		ResponseHeaderTimeout: t.dialTimeout,
 	}
 	return &http.Client{
-		Transport: t.transport,
+		Transport: transport,
 		// Safety cap only; per-command bounds come from the use-case
 		// context enforced by the caller around RunPSWithContext.
 		Timeout: 10 * time.Minute,
-	}
-}
-
-// rotateClient closes idle connections from the previous Post, then creates
-// a fresh http.Client. This prevents fd leaks across hundreds of chunks
-// while ensuring each NTLM handshake starts on a clean TCP connection.
-func (t *rawNTLM) rotateClient() {
-	if t.transport != nil {
-		t.transport.CloseIdleConnections()
-	}
-	t.http = t.httpClient()
+	}, transport
 }
 
 // Post runs the payload through a fresh NTLM handshake per SOAP message,
 // mirroring the library's error shape (status code in the message) so error
 // classification keeps working.
 func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
-	t.rotateClient()
+	httpClient, transport := t.httpClient()
+	defer transport.CloseIdleConnections()
 	payload := msg.String()
 
 	user, domain := splitUser(t.user)
@@ -122,12 +111,12 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	// response carries the Type2 challenge. Bodies are drained before
 	// close: NTLM is connection-bound, so every leg must reuse the same
 	// TCP connection and Go only reuses fully-consumed ones.
-	anon, err := t.round(payload, "")
+	anon, err := t.round(httpClient, payload, "")
 	if err != nil {
 		return "", err
 	}
 	drain(anon)
-	challenge, err := t.round(payload, authScheme+base64.StdEncoding.EncodeToString(type1))
+	challenge, err := t.round(httpClient, payload, authScheme+base64.StdEncoding.EncodeToString(type1))
 	if err != nil {
 		return "", err
 	}
@@ -151,7 +140,7 @@ func (t *rawNTLM) Post(_ *winrm.Client, msg *soap.SoapMessage) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ntlm seal: %w", err)
 	}
-	final, err := t.roundSealed(sealed, authScheme+base64.StdEncoding.EncodeToString(type3))
+	final, err := t.roundSealed(httpClient, sealed, authScheme+base64.StdEncoding.EncodeToString(type3))
 	if err != nil {
 		return "", err
 	}
@@ -202,14 +191,14 @@ func sealMessage(nc *bodgitntlm.Client, payload string) ([]byte, error) {
 }
 
 // roundSealed POSTs a sealed envelope with the encrypted content type.
-func (t *rawNTLM) roundSealed(sealed []byte, auth string) (*http.Response, error) {
+func (t *rawNTLM) roundSealed(hc *http.Client, sealed []byte, auth string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, bytes.NewReader(sealed))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
 	}
 	req.Header.Set(headerContentType, fmt.Sprintf(`multipart/encrypted;protocol="%s";boundary="Encrypted Boundary"`, protocolString))
 	req.Header.Set("Authorization", auth)
-	res, err := t.http.Do(req)
+	res, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("unknown error %w", err)
 	}
@@ -295,7 +284,7 @@ func u32le(n int) []byte {
 // round POSTs payload with an optional Authorization header, returning the
 // response for the caller to consume. A 401 without credentials is the
 // expected handshake step, not an error.
-func (t *rawNTLM) round(payload, auth string) (*http.Response, error) {
+func (t *rawNTLM) round(hc *http.Client, payload, auth string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(t.requestContext(), "POST", t.url, strings.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("impossible to create http request %w", err)
@@ -304,7 +293,7 @@ func (t *rawNTLM) round(payload, auth string) (*http.Response, error) {
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
-	res, err := t.http.Do(req)
+	res, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("unknown error %w", err)
 	}

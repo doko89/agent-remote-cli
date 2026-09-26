@@ -141,7 +141,7 @@ func TestMuxStaleSocketRemovedOnTryDial(t *testing.T) {
 	ln.Close() // file remains, no listener
 
 	hub := NewHub()
-	if c := hub.TryDial(muxHost("dead")); c != nil {
+	if hub.TryDial(muxHost("dead")) != nil {
 		t.Fatal("TryDial must return nil for a dead socket")
 	}
 	_, statErr := os.Stat(path)

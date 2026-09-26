@@ -144,7 +144,8 @@ func TestMuxStaleSocketRemovedOnTryDial(t *testing.T) {
 	if c := hub.TryDial(muxHost("dead")); c != nil {
 		t.Fatal("TryDial must return nil for a dead socket")
 	}
-	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+	_, statErr := os.Stat(path)
+	if !os.IsNotExist(statErr) {
 		t.Fatal("stale socket file must be removed")
 	}
 }

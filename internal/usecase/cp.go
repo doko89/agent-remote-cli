@@ -108,7 +108,7 @@ func resolveSide(hosts map[string]domain.Host, name string) (*domain.Host, error
 	}
 	h, exists := hosts[name]
 	if !exists {
-		return nil, domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+		return nil, hostNotFound(name)
 	}
 	return &h, nil
 }

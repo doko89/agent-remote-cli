@@ -33,6 +33,15 @@ type AddHostInput struct {
 // loadStoreErr prefixes every store Load failure with one stable message.
 const loadStoreErr = "cannot load host store: "
 
+// saveStoreErr prefixes every store Save failure with one stable message.
+const saveStoreErr = "cannot save host store: "
+
+// hostNotFound builds the standard missing-host error shared by every use
+// case that resolves a stored host by name.
+func hostNotFound(name string) error {
+	return domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+}
+
 // ValidateAdd checks the input against the domain contract. Protocol-specific
 // rules live here so `add ssh --help` and `add winrm --help` each only
 // expose flags that can pass for their protocol.
@@ -147,7 +156,7 @@ func AddHost(store HostStore, in AddHostInput) (domain.Host, error) {
 	}
 	hosts[in.Name] = h
 	if err := store.Save(hosts); err != nil {
-		return domain.Host{}, domain.Fail(domain.CodeStoreError, "cannot save host store: "+err.Error())
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, saveStoreErr+err.Error())
 	}
 	return h, nil
 }
@@ -160,11 +169,11 @@ func RemoveHost(store HostStore, secrets SecretResolver, name string) error {
 		return domain.Fail(domain.CodeStoreError, loadStoreErr+err.Error())
 	}
 	if _, exists := hosts[name]; !exists {
-		return domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+		return hostNotFound(name)
 	}
 	delete(hosts, name)
 	if err := store.Save(hosts); err != nil {
-		return domain.Fail(domain.CodeStoreError, "cannot save host store: "+err.Error())
+		return domain.Fail(domain.CodeStoreError, saveStoreErr+err.Error())
 	}
 	_ = secrets.Delete(name)
 	return nil
@@ -187,7 +196,7 @@ func RenameHost(store HostStore, from, to string) (domain.Host, error) {
 	}
 	h, ok := hosts[from]
 	if !ok {
-		return domain.Host{}, domain.Fail(domain.CodeHostNotFound, "host "+from+" not found")
+		return domain.Host{}, hostNotFound(from)
 	}
 	if _, exists := hosts[to]; exists {
 		return domain.Host{}, domain.Fail(domain.CodeHostExists, "host "+to+" already exists; remove it first or pick another name")
@@ -196,7 +205,7 @@ func RenameHost(store HostStore, from, to string) (domain.Host, error) {
 	hosts[to] = h
 	delete(hosts, from)
 	if err := store.Save(hosts); err != nil {
-		return domain.Host{}, domain.Fail(domain.CodeStoreError, "cannot save host store: "+err.Error())
+		return domain.Host{}, domain.Fail(domain.CodeStoreError, saveStoreErr+err.Error())
 	}
 	return h, nil
 }
@@ -224,7 +233,7 @@ func ShowHost(store HostStore, name string) (domain.Host, error) {
 	}
 	h, exists := hosts[name]
 	if !exists {
-		return domain.Host{}, domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+		return domain.Host{}, hostNotFound(name)
 	}
 	return h, nil
 }

@@ -33,7 +33,7 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	}
 	h, exists := hosts[name]
 	if !exists {
-		return domain.Host{}, domain.ExecResult{}, domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+		return domain.Host{}, domain.ExecResult{}, hostNotFound(name)
 	}
 	password, err := secrets.Resolve(h)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestConnection(ctx context.Context, store HostStore, secrets SecretResolver
 	}
 	h, exists := hosts[name]
 	if !exists {
-		return domain.Host{}, domain.TestResult{}, domain.Fail(domain.CodeHostNotFound, "host "+name+" not found")
+		return domain.Host{}, domain.TestResult{}, hostNotFound(name)
 	}
 	password, err := secrets.Resolve(h)
 	if err != nil {

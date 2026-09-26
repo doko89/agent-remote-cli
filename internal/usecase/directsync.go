@@ -122,9 +122,16 @@ func buildWatchScript(cfg DirectSyncConfig, privPath string) string {
 	// when the SSH session drops (prevents orphan processes).
 	srcPath := strings.TrimRight(cfg.SrcPath, "/")
 	dstPath := strings.TrimRight(cfg.DstPath, "/")
-	script := fmt.Sprintf(`trap 'rm -f %s; exit 0' HUP INT TERM
+	script := fmt.Sprintf(`trap 'rm -f %s %s.watch.sh; exit 0' HUP INT TERM
 MARKER="%s.marker"
 touch "$MARKER"
+# Initial sync: copy all existing files before watching for changes.
+find "%s" -type f 2>/dev/null | while IFS= read -r file; do
+  relative="${file#%s/}"
+  dir=$(dirname "%s/$relative")
+  ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
+  scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative"
+done
 while sleep 2; do
   CHANGED=$(find "%s" -newer "$MARKER" -type f 2>/dev/null)
   if [ -n "$CHANGED" ]; then
@@ -137,7 +144,9 @@ while sleep 2; do
     touch "$MARKER"
   fi
 done`,
-		privPath, privPath, srcPath, srcPath, dstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, dstPath)
+		privPath, privPath, privPath,
+		srcPath, srcPath, dstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, dstPath,
+		srcPath, srcPath, dstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, dstPath)
 	scriptPath := privPath + ".watch.sh"
 	// Write script to source, then execute it. Exec blocks until ctx cancels.
 	writeScript := fmt.Sprintf(`cat > %s <<'WATCHER_EOF'

@@ -318,13 +318,14 @@ type execFlags struct {
 	targeting bool
 	parallel  int
 	failFast  bool
+	sudo      bool
 	pwStdin   bool
 	pwEnv     string
 	command   string
 }
 
 func (e execFlags) options() usecase.ExecOptions {
-	return usecase.ExecOptions{Command: e.command, Timeout: e.timeout, NoFilter: e.noFilter}
+	return usecase.ExecOptions{Command: e.command, Timeout: e.timeout, NoFilter: e.noFilter, Sudo: e.sudo}
 }
 
 func parseExecFlags(left, remote []string) (execFlags, error) {
@@ -345,6 +346,7 @@ func parseExecFlags(left, remote []string) (execFlags, error) {
 	fs.BoolVar(&e.all, "all", false, "")
 	fs.IntVar(&e.parallel, "parallel", 4, "")
 	fs.BoolVar(&e.failFast, "fail-fast", false, "")
+	fs.BoolVar(&e.sudo, "sudo", false, "")
 	fs.BoolVar(&e.pwStdin, "password-stdin", false, "")
 	fs.StringVar(&e.pwEnv, "password-env", "", "")
 	if err := fs.Parse(leftFlags); err != nil || len(fs.Args()) != 0 {

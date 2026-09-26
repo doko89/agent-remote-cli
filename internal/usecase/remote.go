@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"agent-remote/internal/domain"
@@ -14,6 +15,7 @@ type ExecOptions struct {
 	Command  string
 	Timeout  time.Duration
 	NoFilter bool
+	Sudo     bool
 }
 
 // Exec resolves the secret, connects, runs the command exactly once, then
@@ -39,6 +41,10 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	if err != nil {
 		return h, domain.ExecResult{}, err
 	}
+	command := opt.Command
+	if opt.Sudo {
+		command = sudoWrap(command, password)
+	}
 	client, err := factory.NewClient(h, password)
 	if err != nil {
 		return h, domain.ExecResult{}, err
@@ -50,7 +56,7 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	defer cancel()
 
 	start := time.Now()
-	res, err := client.Exec(callCtx, opt.Command)
+	res, err := client.Exec(callCtx, command)
 	res.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		return h, res, augmentTimeout(err, timeout)
@@ -70,6 +76,14 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	res.Filtered = cfg.Enabled
 	res.DroppedLines = filtered.Dropped
 	return h, res, nil
+}
+
+// sudoWrap pipes the password into `sudo -S` so non-interactive sessions
+// can run privileged commands. The `-p ”` suppresses the password prompt
+// output; the command is single-quote-escaped for safe inline execution.
+func sudoWrap(cmd string, password string) string {
+	escaped := strings.ReplaceAll(cmd, "'", `'\''`)
+	return fmt.Sprintf("echo '%s' | sudo -S -p '' bash -c '%s'", password, escaped)
 }
 
 // TestConnection verifies reachability and authentication without running a

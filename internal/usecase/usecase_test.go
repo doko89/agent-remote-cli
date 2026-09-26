@@ -67,6 +67,33 @@ func (f stubFactory) NewClient(domain.Host, string) (RemoteClient, error) {
 	return f.client, nil
 }
 
+type recordingFactory struct {
+	onExec func(cmd string)
+}
+
+func (f recordingFactory) NewClient(domain.Host, string) (RemoteClient, error) {
+	return &recordingClient{onExec: f.onExec}, nil
+}
+
+type recordingClient struct {
+	onExec func(cmd string)
+}
+
+func (c *recordingClient) Test(context.Context) (domain.TestResult, error) {
+	return domain.TestResult{Reachable: true}, nil
+}
+
+func (c *recordingClient) Exec(_ context.Context, cmd string) (domain.ExecResult, error) {
+	if c.onExec != nil {
+		c.onExec(cmd)
+	}
+	return domain.ExecResult{ExitCode: 0}, nil
+}
+
+func (c *recordingClient) Close() error { return nil }
+
+func testCtx() context.Context { return context.Background() }
+
 func sshInput(name string) AddHostInput {
 	return AddHostInput{
 		Name: name, Protocol: domain.ProtocolSSH,

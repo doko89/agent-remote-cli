@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -94,22 +95,7 @@ func TestResolveTargets(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hosts, err := ResolveTargets(store, tc.names, tc.group, tc.all)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := make([]string, 0, len(hosts))
-			for _, h := range hosts {
-				got = append(got, h.Name)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("got %v, want %v", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("got %v, want %v", got, tc.want)
-				}
-			}
+			assertTargetNames(t, store, tc.names, tc.group, tc.all, tc.want)
 		})
 	}
 
@@ -118,6 +104,21 @@ func TestResolveTargets(t *testing.T) {
 	}
 	if _, err := ResolveTargets(store, nil, "missing", false); domain.CodeOf(err) != domain.CodeInvalidInput {
 		t.Fatalf("expected invalid_input, got %v", err)
+	}
+}
+
+func assertTargetNames(t *testing.T, store HostStore, names []string, group string, all bool, want []string) {
+	t.Helper()
+	hosts, err := ResolveTargets(store, names, group, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		got = append(got, h.Name)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 

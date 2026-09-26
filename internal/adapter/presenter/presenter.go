@@ -65,6 +65,7 @@ type HostView struct {
 	Address        string   `json:"address"`
 	Port           int      `json:"port"`
 	User           string   `json:"user"`
+	Group          string   `json:"group,omitempty"`
 	Auth           string   `json:"auth"`
 	AuthRef        string   `json:"auth_ref,omitempty"`
 	PassphraseEnv  string   `json:"passphrase_env,omitempty"`
@@ -82,6 +83,7 @@ func ViewHost(h domain.Host) HostView {
 		Address:        h.Address,
 		Port:           h.DefaultPort(),
 		User:           h.User,
+		Group:          h.Group,
 		Auth:           string(h.Auth),
 		AuthRef:        h.AuthRef,
 		PassphraseEnv:  h.PassphraseEnv,
@@ -103,6 +105,7 @@ type ExecView struct {
 	Filtered      bool   `json:"filtered"`
 	DroppedLines  int    `json:"dropped_lines"`
 	PreAuthBanner string `json:"pre_auth_banner,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 // TestView is the JSON data body for `test`.
@@ -144,6 +147,9 @@ func RawShow(h domain.Host) string {
 	fmt.Fprintf(&b, "address:   %s\n", v.Address)
 	fmt.Fprintf(&b, "port:      %d\n", v.Port)
 	fmt.Fprintf(&b, "user:      %s\n", v.User)
+	if v.Group != "" {
+		fmt.Fprintf(&b, "group:     %s\n", v.Group)
+	}
 	fmt.Fprintf(&b, "auth:      %s\n", v.Auth)
 	if v.AuthRef != "" {
 		fmt.Fprintf(&b, "auth_ref:  %s\n", v.AuthRef)

@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
+	"agent-remote/internal/adapter/presenter"
 	"agent-remote/internal/domain"
 	"agent-remote/internal/usecase"
 )
@@ -330,5 +332,60 @@ func TestExecLoginFlag(t *testing.T) {
 	}
 	if rec.cmd != `bash -lic 'echo '\''a b'\'''` {
 		t.Fatalf("login quoting wrong: %q", rec.cmd)
+	}
+}
+
+func TestExecFanoutJSONShape(t *testing.T) {
+	deps := testDeps()
+	opt := Options{Version: "test"}
+	for _, name := range []string{"web2", "web1"} {
+		args := []string{"add", "ssh", name, "--host", "a", "--user", "u", "--group", "web",
+			"--auth", "env", "--auth-ref", "PW"}
+		if out, _ := Run(args, opt, deps); out.ToolErr != nil {
+			t.Fatalf("add %s: %v", name, out.ToolErr)
+		}
+	}
+	out, _ := Run([]string{"exec", "web2,web1", "--", "echo", "hi"}, opt, deps)
+	if out.ToolErr != nil {
+		t.Fatalf("exec: %v", out.ToolErr)
+	}
+	encoded := presenter.JSON(out.Data, false)
+	var body struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Command string `json:"command"`
+			Results []struct {
+				Host   string `json:"host"`
+				Stdout string `json:"stdout"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &body); err != nil {
+		t.Fatalf("decode: %v\n%s", err, encoded)
+	}
+	if !body.OK || body.Data.Command != "echo hi" || len(body.Data.Results) != 2 ||
+		body.Data.Results[0].Host != "web2" || body.Data.Results[1].Host != "web1" {
+		t.Fatalf("unexpected fan-out output: %s", encoded)
+	}
+
+	out, _ = Run([]string{"exec", "--group", "web", "--parallel", "2", "--", "echo"}, opt, deps)
+	if out.ToolErr != nil {
+		t.Fatalf("group exec: %v", out.ToolErr)
+	}
+}
+
+func TestExecFanoutInputErrors(t *testing.T) {
+	deps := testDeps()
+	opt := Options{Version: "test"}
+	cases := [][]string{
+		{"exec", "web", "--group", "web", "--", "echo"},
+		{"exec", "--all", "--parallel", "0", "--", "echo"},
+		{"exec", "--all", "--parallel", "65", "--", "echo"},
+		{"exec", "--group", "missing", "--", "echo"},
+	}
+	for _, args := range cases {
+		if out, _ := Run(args, opt, deps); out.ToolErr == nil {
+			t.Fatalf("%v: expected error", args)
+		}
 	}
 }

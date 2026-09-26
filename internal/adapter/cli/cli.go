@@ -67,6 +67,9 @@ func (o Outcome) ExitCode() int {
 		return ExitToolFail
 	}
 	if o.RemoteRan && o.RemoteExit != 0 {
+		if o.RemoteExit == ExitToolFail {
+			return ExitToolFail
+		}
 		return ExitRemoteKo
 	}
 	return ExitOK
@@ -274,27 +277,33 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 	}
 	if sep < 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput,
-			"missing `--` separator: usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
+			"missing `--` separator: usage: exec <name[,name...]> | --group G | --all -- <command...>"))
 	}
 	left, remote := args[:sep], args[sep+1:]
 	if len(remote) == 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "remote command must not be empty"))
 	}
-	if len(left) == 0 || strings.HasPrefix(left[0], "-") {
-		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
+	if len(left) == 0 {
+		return fail(domain.Fail(domain.CodeInvalidInput, "host must not be empty"))
 	}
-	name, leftFlags := left[0], left[1:]
+	name, leftFlags := "", left
+	if !strings.HasPrefix(left[0], "-") {
+		name, leftFlags = left[0], left[1:]
+	}
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	timeout := fs.Duration("timeout", 30*time.Second, "")
 	noFilter := fs.Bool("no-filter", false, "")
 	login := fs.Bool("login", false, "")
+	group := fs.String("group", "", "")
+	all := fs.Bool("all", false, "")
+	parallel := fs.Int("parallel", 4, "")
+	failFast := fs.Bool("fail-fast", false, "")
 	pwStdin := fs.Bool("password-stdin", false, "")
 	pwEnv := fs.String("password-env", "", "")
 	if err := fs.Parse(leftFlags); err != nil || len(fs.Args()) != 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput,
-			"usage: exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>"))
+			"usage: exec <name[,name...]> | --group G | --all -- <command...>"))
 	}
 	if *timeout <= 0 {
 		return fail(domain.Fail(domain.CodeInvalidInput, "timeout must be positive"))
@@ -303,6 +312,40 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 	if *login {
 		command = loginWrap(command)
 	}
+	targeting := *group != "" || *all
+	if targeting && name != "" {
+		return fail(domain.Fail(domain.CodeInvalidInput,
+			"usage: target either <name[,name...]> or --group GROUP or --all, not both"))
+	}
+	if *parallel < 1 || *parallel > 64 {
+		return fail(domain.Fail(domain.CodeInvalidInput, "parallel must be between 1 and 64"))
+	}
+	var targets []domain.Host
+	var err error
+	var names []string
+	for _, n := range strings.Split(name, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
+	if targeting || len(names) > 1 {
+		targets, err = usecase.ResolveTargets(d.Store, names, *group, *all)
+		if err != nil {
+			return fail(err)
+		}
+	} else {
+		if len(names) == 0 {
+			return fail(domain.Fail(domain.CodeInvalidInput, "host must not be empty"))
+		}
+		targets, err = usecase.ResolveTargets(d.Store, names, "", false)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if len(targets) != 1 || targeting {
+		return runFanout(d, targets, usecase.ExecOptions{Command: command, Timeout: *timeout, NoFilter: *noFilter}, *parallel, *failFast, overrideSecrets(d, opt, *pwStdin, *pwEnv))
+	}
+	name = targets[0].Name
 	h, res, err := usecase.Exec(context.Background(), d.Store, overrideSecrets(d, opt, *pwStdin, *pwEnv), d.Factory, name,
 		usecase.ExecOptions{Command: command, Timeout: *timeout, NoFilter: *noFilter})
 	if err != nil {
@@ -315,6 +358,38 @@ func runExec(args []string, opt Options, d Deps) Outcome {
 		DroppedLines: res.DroppedLines, PreAuthBanner: res.PreAuthBanner,
 	}
 	return Outcome{Data: view, RawOut: res.Stdout, RawErr: res.Stderr, RemoteRan: true, RemoteExit: res.ExitCode}
+}
+
+// runFanout executes one command on many hosts and renders a per-host
+// result list. Exit code aggregation: any tool-level failure (connect,
+// auth, timeout) wins with 2; otherwise any non-zero remote exit yields 1.
+func runFanout(d Deps, targets []domain.Host, opt usecase.ExecOptions, parallel int, failFast bool, secrets usecase.SecretResolver) Outcome {
+	results := usecase.ExecFanout(context.Background(), d.Store, secrets, d.Factory, targets, opt, parallel, failFast)
+	views := make([]presenter.ExecView, 0, len(results))
+	raws := make([]string, 0, len(results))
+	worst := 0
+	for _, r := range results {
+		v := presenter.ExecView{
+			Host: r.Host, Command: opt.Command,
+			Stdout: r.Res.Stdout, Stderr: r.Res.Stderr, ExitCode: r.Res.ExitCode,
+			DurationMs: r.Res.DurationMs, Filtered: r.Res.Filtered,
+			DroppedLines: r.Res.DroppedLines, PreAuthBanner: r.Res.PreAuthBanner,
+		}
+		if r.Err != nil {
+			v.Error = r.Err.Error()
+			worst = ExitToolFail
+		} else if r.Res.ExitCode != 0 && worst == 0 {
+			worst = ExitRemoteKo
+		}
+		views = append(views, v)
+		raws = append(raws, "── "+r.Host+"\n"+r.Res.Stdout)
+	}
+	return Outcome{
+		Data:       map[string]any{"command": opt.Command, "results": views},
+		RawOut:     strings.Join(raws, "\n"),
+		RemoteRan:  true,
+		RemoteExit: worst,
+	}
 }
 
 // loginWrap runs cmd through a bash login+interactive shell so the full

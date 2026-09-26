@@ -56,6 +56,8 @@ type Host struct {
 	// AuthRef is the environment variable name (AuthEnv) or key path
 	// (AuthKeyFile). Unused for keyring/stdin/none.
 	AuthRef string `json:"auth_ref,omitempty"`
+	// Group is an optional label for fan-out targeting (exec --group).
+	Group string `json:"group,omitempty"`
 	// PassphraseEnv names the env var holding an encrypted key's
 	// passphrase (SSH keyfile only). Empty means an unencrypted key, or a
 	// passphrase supplied one-shot at exec time.

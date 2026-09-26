@@ -15,7 +15,7 @@ go vet ./... && go test ./...
 
 ```sh
 # Daftarkan host (SSH dan WinRM jalurnya terpisah)
-agent-remote add ssh web1 --host 10.0.0.1 --user deploy --auth env --auth-ref DEPLOY_PW
+agent-remote add ssh web1 --host 10.0.0.1 --user deploy --group web --auth env --auth-ref DEPLOY_PW
 agent-remote add winrm w1 --host 10.0.0.5 --user admin --password-stdin < pw.txt
 
 # Kelola
@@ -28,6 +28,11 @@ agent-remote rm web1            # juga membersihkan secret keyring
 agent-remote test web1
 agent-remote exec web1 -- df -h /
 agent-remote exec web1 --login -- which bun   # bash -lic: PATH profil user aktif
+
+# Fan-out satu command ke banyak host (worker pool deterministik)
+agent-remote exec web1,web2 -- uptime
+agent-remote exec --group web --parallel 8 -- df -h /
+agent-remote exec --all --parallel 8 --fail-fast -- systemctl is-active app
 
 # Connection reuse ala ControlPersist (default aktif, idle 10m)
 agent-remote exec web1 -- uptime   # exec ke-2 dst. tanpa handshake ulang
@@ -64,6 +69,7 @@ Filter banner (`--no-filter`) dan format (`--raw`) independen.
 |------|------|
 | 0 | sukses (command remote exit 0) |
 | 1 | command remote jalan, exit ≠ 0 (ada di `data.exit_code`) |
+| 1 | fan-out: minimal satu host remote exit ≠ 0 (`data.results[].exit_code`) |
 | 2 | kegagalan tool (`error.code`: `host_not_found`, `auth_failed`, `connection_failed`, `timeout`, `secret_unavailable`, `invalid_input`, `store_error`, ...) |
 
 ## Secret (tidak pernah jadi nilai flag)

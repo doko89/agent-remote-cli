@@ -29,6 +29,7 @@ type addFlags struct {
 	pwEnv    string
 	patterns stringList
 	noFilter bool
+	group    string
 
 	transport string
 	insecure  bool
@@ -59,6 +60,7 @@ func addFlagSet(proto domain.Protocol, args []string) (*flag.FlagSet, *addFlags,
 	fs.StringVar(&f.auth, "auth", "keyring", "secret source: keyring | env | stdin | keyfile (ssh only)")
 	fs.StringVar(&f.authRef, "auth-ref", "", "env var name (auth=env) or private key path (auth=keyfile)")
 	fs.StringVar(&f.passEnv, "passphrase-env", "", "env var with the key passphrase (ssh keyfile only)")
+	fs.StringVar(&f.group, "group", "", "optional fan-out target label")
 	fs.BoolVar(&f.pwStdin, "password-stdin", false, "read the keyring secret from stdin at add time")
 	fs.StringVar(&f.pwEnv, "password-env", "", "read the keyring secret from $VAR at add time")
 	fs.Var(&f.patterns, "filter-pattern", "extra banner-filter regex (repeatable)")
@@ -98,6 +100,7 @@ func runAddProto(proto domain.Protocol, args []string, opt Options, d Deps) Outc
 		Name: name, Protocol: proto,
 		Address: f.host, Port: f.port, User: f.user,
 		Auth: domain.AuthMethod(strings.ToLower(f.auth)), AuthRef: f.authRef,
+		Group:               f.group,
 		PassphraseEnv:       f.passEnv,
 		WinRMTransport:      f.transport,
 		WinRMInsecure:       f.insecure,
@@ -200,7 +203,9 @@ COMMANDS
   list                         list hosts (never shows secrets)
   show <name>                  show one host (never shows secrets)
   test <name> [--timeout 30s]  handshake-only connectivity check
-  exec <name> [--timeout 30s] [--no-filter] [--login] -- <command...>
+  exec <name[,name...]> | --group G | --all
+                               [--timeout 30s] [--parallel 4] [--fail-fast]
+                               [--no-filter] [--login] -- <command...>
                                run a remote command (banner-filtered);
                                --login wraps it in 'bash -lic' so the full
                                user profile PATH applies (still no PTY;
@@ -238,6 +243,7 @@ func addUsage(proto domain.Protocol) string {
   --auth METHOD            keyring (default) | env | stdin | keyfile
   --auth-ref REF           env var name (auth=env) or key path (auth=keyfile)
   --passphrase-env VAR     env var with the key passphrase (auth=keyfile)
+  --group LABEL            optional label for exec --group
   --password-stdin         read keyring secret from stdin now (auth=keyring)
   --password-env VAR       read keyring secret from $VAR now (auth=keyring)
   --filter-pattern REGEX   extra banner-filter regex (repeatable)
@@ -250,6 +256,7 @@ func addUsage(proto domain.Protocol) string {
   --insecure               skip TLS verification (https only)
   --auth METHOD            keyring (default) | env | stdin
   --auth-ref REF           env var name (auth=env)
+  --group LABEL            optional label for exec --group
   --password-stdin         read keyring secret from stdin now (auth=keyring)
   --password-env VAR       read keyring secret from $VAR now (auth=keyring)
   --filter-pattern REGEX   extra banner-filter regex (repeatable)

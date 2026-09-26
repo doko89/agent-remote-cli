@@ -26,6 +26,8 @@ type AddHostInput struct {
 	WinRMTransport string // http | https, winrm only
 	WinRMInsecure  bool   // winrm only
 
+	Group string
+
 	ExtraFilterPatterns []string
 	FilterDisabled      bool
 }
@@ -83,6 +85,9 @@ func validateCommon(in AddHostInput) error {
 	}
 	if !in.Auth.Valid() {
 		return domain.Fail(domain.CodeInvalidInput, "unsupported auth method")
+	}
+	if strings.Contains(in.Group, ",") {
+		return domain.Fail(domain.CodeInvalidInput, "group must not contain commas")
 	}
 	return nil
 }
@@ -145,6 +150,7 @@ func AddHost(store HostStore, in AddHostInput) (domain.Host, error) {
 		Auth:          in.Auth,
 		AuthRef:       in.AuthRef,
 		PassphraseEnv: in.PassphraseEnv,
+		Group:         strings.TrimSpace(in.Group),
 		Filter:        domain.FilterConfig{Enabled: !in.FilterDisabled, ExtraPatterns: in.ExtraFilterPatterns},
 	}
 	if in.Protocol == domain.ProtocolWinRM {

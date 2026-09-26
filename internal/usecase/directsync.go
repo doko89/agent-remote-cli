@@ -117,22 +117,33 @@ const directSyncMaxTimeout = 8760 * time.Hour
 // no inotifywait or external package required. Every SSH/scp invocation
 // reuses the ephemeral key pushed at session start.
 func buildWatchScript(cfg DirectSyncConfig, privPath string) string {
-	// Use find -newer against a marker file to detect changes each cycle.
-	// The marker is touched after every successful sync pass, so only files
-	// modified since the last pass are copied. No external tools needed.
-	return fmt.Sprintf(`MARKER="%s.marker"
+	// Write the watch script to a temp file, then execute it. This avoids
+	// shell escaping issues from inline bash -c. SIGHUP trap kills the loop
+	// when the SSH session drops (prevents orphan processes).
+	srcPath := strings.TrimRight(cfg.SrcPath, "/")
+	dstPath := strings.TrimRight(cfg.DstPath, "/")
+	script := fmt.Sprintf(`trap 'rm -f %s; exit 0' HUP INT TERM
+MARKER="%s.marker"
 touch "$MARKER"
 while sleep 2; do
-  CHANGED=$(find %s -newer "$MARKER" -type f 2>/dev/null)
+  CHANGED=$(find "%s" -newer "$MARKER" -type f 2>/dev/null)
   if [ -n "$CHANGED" ]; then
     echo "$CHANGED" | while IFS= read -r file; do
-      relative="\${file#%s/}"
-      dir="\$(dirname "%s/\$relative")"
+      relative="${file#%s/}"
+      dir=$(dirname "%s/$relative")
       ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
-      scp -i %s -o StrictHostKeyChecking=no "\$file" "%s:%s/\$relative"
+      scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative"
     done
     touch "$MARKER"
   fi
 done`,
-		privPath, cfg.SrcPath, cfg.SrcPath, cfg.DstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, cfg.DstPath)
+		privPath, privPath, srcPath, srcPath, dstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, dstPath)
+	scriptPath := privPath + ".watch.sh"
+	// Write script to source, then execute it. Exec blocks until ctx cancels.
+	writeScript := fmt.Sprintf(`cat > %s <<'WATCHER_EOF'
+%s
+WATCHER_EOF
+chmod +x %s
+bash %s`, scriptPath, script, scriptPath, scriptPath)
+	return writeScript
 }

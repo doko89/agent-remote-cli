@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,30 @@ func TestExecUnknownHost(t *testing.T) {
 		"nope", ExecOptions{Command: "x"})
 	if domain.CodeOf(err) != domain.CodeHostNotFound {
 		t.Fatalf("expected host_not_found, got %v", err)
+	}
+}
+
+// TestExecTimeoutMessagePinsBudget proves timeout errors name the exact
+// effective budget and whether it was the default, so agents know which
+// --timeout value to raise.
+func TestExecTimeoutMessagePinsBudget(t *testing.T) {
+	store := &memStore{hosts: map[string]domain.Host{}}
+	if _, err := AddHost(store, sshInput("web1")); err != nil {
+		t.Fatal(err)
+	}
+	times := &stubClient{execErr: domain.Fail(domain.CodeTimeout, "ssh command timed out")}
+	_, _, err := Exec(context.Background(), store, stubSecrets{}, stubFactory{times},
+		"web1", ExecOptions{Command: "x"})
+	if err == nil || domain.CodeOf(err) != domain.CodeTimeout {
+		t.Fatalf("expected timeout error: %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "timeout 30s — default") {
+		t.Fatalf("default budget missing: %q", got)
+	}
+	_, _, err = Exec(context.Background(), store, stubSecrets{}, stubFactory{times},
+		"web1", ExecOptions{Command: "x", Timeout: 2 * time.Minute})
+	if got := err.Error(); !strings.Contains(got, "timeout 2m0s — raise with --timeout") || strings.Contains(got, "default") {
+		t.Fatalf("custom budget wrong: %q", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"agent-remote/internal/domain"
@@ -52,7 +53,7 @@ func Exec(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	res, err := client.Exec(callCtx, opt.Command)
 	res.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
-		return h, res, err
+		return h, res, augmentTimeout(err, timeout)
 	}
 	cfg := h.Filter
 	if opt.NoFilter {
@@ -100,7 +101,21 @@ func TestConnection(ctx context.Context, store HostStore, secrets SecretResolver
 	defer cancel()
 	res, err := client.Test(callCtx)
 	if err != nil {
-		return h, res, err
+		return h, res, augmentTimeout(err, timeoutOrDefault(timeout))
 	}
 	return h, res, nil
+}
+
+// augmentTimeout appends the effective timeout to any timeout-classified
+// failure so agents learn the exact budget and which flag raises it,
+// instead of guessing whether "timed out" meant 30s or their own value.
+func augmentTimeout(err error, d time.Duration) error {
+	if err == nil || domain.CodeOf(err) != domain.CodeTimeout {
+		return err
+	}
+	hint := "raise with --timeout"
+	if d == DefaultTimeout {
+		hint = "default; raise with --timeout"
+	}
+	return domain.Fail(domain.CodeTimeout, fmt.Sprintf("%s (timeout %s — %s)", err.Error(), d, hint))
 }

@@ -406,6 +406,14 @@ func (c *muxClient) round(ctx context.Context, req request) (response, error) {
 	}
 	line, err := bufio.NewReaderSize(conn, 4<<20).ReadString('\n')
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			// The client-side deadline fired before the server's own
+			// error response arrived: the command may still have run
+			// remotely. Surface as timeout so augmentTimeout appends the
+			// effective budget for the agent.
+			return response{}, domain.Fail(domain.CodeTimeout,
+				"mux response timed out; the command may still have run remotely")
+		}
 		return response{}, &MuxError{Sent: true, Err: fmt.Errorf("mux read: %s", err.Error())}
 	}
 	var resp response

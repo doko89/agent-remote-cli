@@ -96,7 +96,7 @@ func Copy(ctx context.Context, store HostStore, secrets SecretResolver, factory 
 	}
 	defer c.close()
 	if err := c.copy(callCtx, src, req.SrcPath, dst, req.DstPath, req.Opt.Recursive, &res); err != nil {
-		return res, err
+		return res, augmentTimeout(err, timeout)
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
 	return res, nil

@@ -83,7 +83,7 @@ func SyncOneShot(ctx context.Context, store HostStore, secrets SecretResolver, f
 	}
 	defer s.close()
 	if err := s.scan(callCtx, &res, req.Opt); err != nil {
-		return res, err
+		return res, augmentTimeout(err, timeout)
 	}
 	res.Scans = 1
 	res.DurationMs = time.Since(start).Milliseconds()

@@ -32,7 +32,6 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 	half := fs.Bool("half", false, "")
 	watch := fs.Bool("w", false, "")
 	fs.BoolVar(watch, "watch", false, "")
-	direct := fs.Bool("direct", false, "")
 	interval := fs.Duration("interval", 5*time.Second, "")
 	timeout := fs.Duration("timeout", 10*time.Minute, "")
 	parallel := fs.Int("parallel", 4, "parallel file transfers for directory scans")
@@ -71,18 +70,12 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 		Opt: usecase.SyncOptions{Delete: *del, Timeout: *timeout, Concurrency: *parallel},
 	}
 	secrets := overrideSecrets(d, opt, *pwStdin, *pwEnv)
-	if *direct && !*watch {
-		return fail(domain.Fail(domain.CodeInvalidInput, "--direct requires -w"))
-	}
 	if !*watch {
 		res, err := usecase.SyncOneShot(context.Background(), d.Store, secrets, d.TFactory, req)
 		if err != nil {
 			return fail(err)
 		}
 		return syncOutcome(pos, mode, res)
-	}
-	if *direct {
-		return runDirectSync(d, opt, secrets, pos, mode, req)
 	}
 	if *watch && srcHost == "" {
 		return runLocalWatch(d, opt, secrets, pos, mode, req, *interval)
@@ -166,47 +159,6 @@ func runLocalWatch(d Deps, opt Options, secrets usecase.SecretResolver, pos []st
 	}
 }
 
-func runDirectSync(d Deps, opt Options, secrets usecase.SecretResolver, pos []string, mode string, req usecase.SyncRequest) Outcome {
-	if req.SrcHost == "" || req.DstHost == "" {
-		return fail(domain.Fail(domain.CodeInvalidInput, "--direct requires both sides to be remote hosts"))
-	}
-	dstH, err := usecase.ShowHost(d.Store, req.DstHost)
-	if err != nil {
-		return fail(err)
-	}
-	dstAddr := fmt.Sprintf("%s@%s", dstH.User, dstH.Address)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	cfg := usecase.DirectSyncConfig{
-		SrcHost: req.SrcHost, SrcPath: req.SrcPath,
-		DstHost: req.DstHost, DstPath: req.DstPath, DstAddr: dstAddr,
-		Delete: req.Opt.Delete,
-	}
-	// Force-exit on signal: SSH sess.Run may not return after sess.Close
-	// when the remote runs a long-lived pipeline. Without this, Ctrl+C hangs.
-	// Ephemeral keys are cleaned by DirectSync's internal cleanup before the
-	// blocking exec returns; if it doesn't, `agent-remote cleanup` purges
-	// them. Better to exit than hang.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		os.Exit(0)
-	}()
-	cleanup, syncErr := usecase.DirectSync(ctx, d.Store, secrets, d.Factory, cfg)
-	if cleanup != nil {
-		defer cleanup()
-	}
-	if syncErr != nil && ctx.Err() == nil {
-		return fail(syncErr)
-	}
-	raw := fmt.Sprintf("direct sync ended [%s]: %s -> %s", mode, pos[0], pos[1])
-	return Outcome{
-		Data:   map[string]any{"src": pos[0], "dest": pos[1], "mode": mode, "direct": true},
-		RawOut: raw,
-	}
-}
-
 // runWatch loops scans until interrupted, streaming each applied action.
 func runWatch(d Deps, opt Options, secrets usecase.SecretResolver, pos []string, mode string, req usecase.SyncRequest, interval time.Duration) Outcome {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -243,7 +195,7 @@ func syncOutcome(pos []string, mode string, res usecase.SyncResult) Outcome {
 }
 
 func syncUsage() string {
-	return `usage: sync [--delete | --half] [-w] [--direct] [--interval 5s] [--timeout 10m] [--parallel 4] <src> <dest>
+	return `usage: sync [--delete | --half] [-w] [--interval 5s] [--timeout 10m] [--parallel 4] <src> <dest>
 
   One-way mirror src onto dest (new + changed files copy over).
   Sides share cp's [host:]path syntax.
@@ -253,7 +205,5 @@ func syncUsage() string {
   -w, --watch
              keep running until interrupted; rescan every --interval and
              stream one JSON object per applied action
-  --direct   (with -w) ephemeral SSH key: source watches inotify and pushes
-             directly to destination; keys cleaned up on exit
   --parallel N  concurrent file transfers per scan (default 4, max 64)`
 }

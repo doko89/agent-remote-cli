@@ -143,6 +143,7 @@ find "%s" -type f 2>/dev/null | while IFS= read -r file; do
   scp -i %s -o StrictHostKeyChecking=no "$file" "%s:%s/$relative" < /dev/null
 done
 while sleep 2; do
+  kill -0 $PPID 2>/dev/null || exit 0
   CHANGED=$(find "%s" -newer "$MARKER" -type f 2>/dev/null)
   if [ -n "$CHANGED" ]; then
     echo "$CHANGED" | while IFS= read -r file; do

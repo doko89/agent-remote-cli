@@ -100,6 +100,17 @@ func runDirectSync(d Deps, opt Options, secrets usecase.SecretResolver, pos []st
 		DstHost: req.DstHost, DstPath: req.DstPath, DstAddr: dstAddr,
 		Delete: req.Opt.Delete,
 	}
+	// Force-exit on signal: SSH sess.Run may not return after sess.Close
+	// when the remote runs a long-lived pipeline. Without this, Ctrl+C hangs.
+	// Ephemeral keys are cleaned by DirectSync's internal cleanup before the
+	// blocking exec returns; if it doesn't, `agent-remote cleanup` purges
+	// them. Better to exit than hang.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		os.Exit(0)
+	}()
 	cleanup, syncErr := usecase.DirectSync(ctx, d.Store, secrets, d.Factory, cfg)
 	if cleanup != nil {
 		defer cleanup()

@@ -34,6 +34,11 @@ agent-remote exec web1,web2 -- uptime
 agent-remote exec --group web --parallel 8 -- df -h /
 agent-remote exec --all --parallel 8 --fail-fast -- systemctl is-active app
 
+# Script agnostik — pipe base64 ke interpreter remote (no temp files)
+agent-remote script --group web -- ./deploy.sh        # bash (auto dari shebang)
+agent-remote script --group web -- ./check.py         # python3
+agent-remote script web1,web2 --interpreter node -- ./health.js
+
 # Kelola group tanpa rm + add ulang
 agent-remote group list
 agent-remote group rename web staging

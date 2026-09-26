@@ -32,6 +32,7 @@ type Options struct {
 	ConfigPath string
 	Raw        bool
 	Pretty     bool
+	NoMux      bool
 	Stdin      io.Reader
 	Version    string
 }
@@ -125,6 +126,10 @@ func shiftGlobal(args []string, opt *Options) (string, []string) {
 				opt.Raw = true
 			case a == "--pretty":
 				opt.Pretty = true
+			case a == "--no-mux":
+				opt.NoMux = true
+			case a == "--mux-ttl" && i+1 < len(args):
+				i++
 			case strings.HasPrefix(a, "--config="):
 				opt.ConfigPath = strings.TrimPrefix(a, "--config=")
 			case a == "--config" && i+1 < len(args):

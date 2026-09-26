@@ -188,6 +188,10 @@ func usage(version string) string {
 USAGE
   agent-remote [--config PATH] [--raw] [--pretty] <command> [options]
 
+CONNECTION REUSE (SSH)
+  Repeated exec/test reuse one authenticated connection (ControlPersist
+  style). --no-mux disables it; --mux-ttl DUR sets the idle linger time.
+
 COMMANDS
   add ssh <name> [options]     register a new SSH host
   add winrm <name> [options]   register a new WinRM host

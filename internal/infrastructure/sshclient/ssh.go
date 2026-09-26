@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"agent-remote/internal/domain"
+	"agent-remote/internal/infrastructure/sshmux"
 	"agent-remote/internal/usecase"
 )
 
@@ -26,16 +27,40 @@ import (
 type Factory struct {
 	// DialTimeout bounds TCP connect + handshake per attempt.
 	DialTimeout time.Duration
+	// Hub enables connection reuse (ControlPersist-style). Nil disables mux.
+	Hub *sshmux.Hub
+	// SpawnMaster, when set, is called after a fresh dial on a host with no
+	// live master: it launches a detached serve process that dials and owns
+	// the mux socket, so the foreground process can exit immediately.
+	SpawnMaster func(h domain.Host)
 }
 
 // NewClient connects and authenticates. password is the key passphrase when
 // AuthRef points at a key file, otherwise the password credential.
 func (f Factory) NewClient(h domain.Host, password string) (usecase.RemoteClient, error) {
+	if c := f.Hub.TryDial(h); c != nil {
+		return c, nil
+	}
 	conn, banner, err := dial(h, password, f.DialTimeout)
 	if err != nil {
 		return nil, err
 	}
-	return &client{conn: conn, banner: banner}, nil
+	c := &client{conn: conn, banner: banner}
+	if f.Hub != nil && f.SpawnMaster != nil {
+		f.SpawnMaster(h)
+	}
+	return c, nil
+}
+
+// NewRawClient dials and authenticates without any mux involvement. It
+// backs the detached mux serve child, which owns its connection for the
+// whole TTL and therefore must never try to reuse one.
+func NewRawClient(h domain.Host, password string, dialTimeout time.Duration) (usecase.RemoteClient, string, error) {
+	conn, banner, err := dial(h, password, dialTimeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return &client{conn: conn, banner: banner}, banner, nil
 }
 
 // dial opens one authenticated SSH connection, shared by the exec client

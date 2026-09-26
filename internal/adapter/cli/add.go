@@ -208,6 +208,8 @@ COMMANDS
   exec <name[,name...]> | --group G | --all
                                [--timeout 30s] [--parallel 4] [--fail-fast]
                                [--no-filter] [--login] -- <command...>
+  script <name[,name...]> | --group G | --all
+                               [flags] -- <local_script> [args...]
                                run a remote command (banner-filtered);
                                --login wraps it in 'bash -lic' so the full
                                user profile PATH applies (still no PTY;

@@ -101,6 +101,8 @@ func dispatch(cmd string, rest []string, opt Options, d Deps) Outcome {
 		return runTest(rest, opt, d)
 	case "exec":
 		return runExec(rest, opt, d)
+	case "script":
+		return runScript(rest, opt, d)
 	case "cp":
 		return runCp(rest, opt, d)
 	case "sync":

@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -98,7 +99,8 @@ func DirectSync(ctx context.Context, store HostStore, secrets SecretResolver, fa
 
 	// Build and run the watch pipeline on the source.
 	watchCmd := buildWatchScript(cfg, privPath)
-	_, _, execErr := Exec(ctx, store, secrets, factory, cfg.SrcHost, ExecOptions{Command: watchCmd})
+	_, _, execErr := Exec(ctx, store, secrets, factory, cfg.SrcHost,
+		ExecOptions{Command: watchCmd, Timeout: directSyncMaxTimeout})
 	cleanup()
 	if execErr != nil && ctx.Err() == nil {
 		return cleanup, domain.Fail(domain.CodeConnectionFailed, "direct sync: "+execErr.Error())
@@ -106,24 +108,31 @@ func DirectSync(ctx context.Context, store HostStore, secrets SecretResolver, fa
 	return cleanup, nil
 }
 
+// directSyncMaxTimeout bounds the watch pipeline. In practice the session
+// ends via ctx cancellation (Ctrl+C), not this timeout.
+const directSyncMaxTimeout = 8760 * time.Hour
+
 // buildWatchScript constructs the shell pipeline that runs on the source
-// server: inotifywait streams events, a while-loop scps each changed file
-// directly to the destination using the ephemeral key.
+// server. Uses a polling loop with `find -newer` as the change detector —
+// no inotifywait or external package required. Every SSH/scp invocation
+// reuses the ephemeral key pushed at session start.
 func buildWatchScript(cfg DirectSyncConfig, privPath string) string {
-	deleteClause := ""
-	if cfg.Delete {
-		deleteClause = `
-  if echo "$event" | grep -q DELETE; then
-    ssh -i %s -o StrictHostKeyChecking=no %s "rm -f '%s/\${file#%s/}'"
-    continue
-  fi`
-		deleteClause = fmt.Sprintf(deleteClause, privPath, cfg.DstAddr, cfg.DstPath, cfg.SrcPath)
-	}
-	return fmt.Sprintf(`inotifywait -m -r --format '%%w%%f %%e' -e close_write,create,moved_to,delete %s 2>/dev/null | while read file event; do%s
-  relative="\${file#%s/}"
-  dir="\$(dirname "%s/\$relative")"
-  ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
-  scp -i %s -o StrictHostKeyChecking=no "\$file" "%s:%s/\$relative"
+	// Use find -newer against a marker file to detect changes each cycle.
+	// The marker is touched after every successful sync pass, so only files
+	// modified since the last pass are copied. No external tools needed.
+	return fmt.Sprintf(`MARKER="%s.marker"
+touch "$MARKER"
+while sleep 2; do
+  CHANGED=$(find %s -newer "$MARKER" -type f 2>/dev/null)
+  if [ -n "$CHANGED" ]; then
+    echo "$CHANGED" | while IFS= read -r file; do
+      relative="\${file#%s/}"
+      dir="\$(dirname "%s/\$relative")"
+      ssh -i %s -o StrictHostKeyChecking=no %s "mkdir -p '$dir'"
+      scp -i %s -o StrictHostKeyChecking=no "\$file" "%s:%s/\$relative"
+    done
+    touch "$MARKER"
+  fi
 done`,
-		cfg.SrcPath, deleteClause, cfg.SrcPath, cfg.DstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, cfg.DstPath)
+		privPath, cfg.SrcPath, cfg.SrcPath, cfg.DstPath, privPath, cfg.DstAddr, privPath, cfg.DstAddr, cfg.DstPath)
 }

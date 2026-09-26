@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"agent-remote/internal/domain"
 	"agent-remote/internal/usecase"
@@ -81,7 +84,86 @@ func runSync(args []string, opt Options, d Deps) Outcome {
 	if *direct {
 		return runDirectSync(d, opt, secrets, pos, mode, req)
 	}
+	if *watch && srcHost == "" {
+		return runLocalWatch(d, opt, secrets, pos, mode, req, *interval)
+	}
 	return runWatch(d, opt, secrets, pos, mode, req, *interval)
+}
+
+func newLocalWatcher(root string) (*fsnotify.Watcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, domain.Fail(domain.CodeInternal, "fsnotify: "+err.Error())
+	}
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return watcher.Add(path)
+		}
+		return nil
+	}); err != nil {
+		watcher.Close()
+		return nil, domain.Fail(domain.CodeInternal, "watch "+root+": "+err.Error())
+	}
+	return watcher, nil
+}
+
+func runLocalWatch(d Deps, opt Options, secrets usecase.SecretResolver, pos []string, mode string, req usecase.SyncRequest, interval time.Duration) Outcome {
+	watcher, err := newLocalWatcher(req.SrcPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer watcher.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var total usecase.SyncResult
+	start := time.Now()
+	printEvent := func(ev usecase.SyncEvent) {
+		if opt.Raw {
+			fmt.Printf("%s %s\n", ev.Op, ev.Path)
+			return
+		}
+		raw, _ := json.Marshal(map[string]any{"event": ev.Op, "path": ev.Path, "bytes": ev.Bytes})
+		fmt.Println(string(raw))
+	}
+	req.Opt.OnEvent = printEvent
+	for {
+		select {
+		case <-ctx.Done():
+			total.DurationMs = time.Since(start).Milliseconds()
+			out := syncOutcome(pos, mode, total)
+			out.RemoteRan = false
+			return out
+		case event, ok := <-watcher.Events:
+			if !ok {
+				out := syncOutcome(pos, mode, total)
+				out.RemoteRan = false
+				return out
+			}
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) == 0 {
+				continue
+			}
+			if info, statErr := os.Stat(event.Name); statErr == nil && info.IsDir() {
+				watcher.Add(event.Name)
+				continue
+			}
+			rel, relErr := filepath.Rel(req.SrcPath, event.Name)
+			if relErr != nil {
+				continue
+			}
+			fileReq := req
+			fileReq.SrcPath = event.Name
+			fileReq.DstPath = filepath.Join(req.DstPath, rel)
+			res, oneErr := usecase.SyncOneShot(ctx, d.Store, secrets, d.TFactory, fileReq)
+			if oneErr != nil {
+				continue
+			}
+			total.Files += res.Files
+			total.Bytes += res.Bytes
+		}
+	}
 }
 
 func runDirectSync(d Deps, opt Options, secrets usecase.SecretResolver, pos []string, mode string, req usecase.SyncRequest) Outcome {
